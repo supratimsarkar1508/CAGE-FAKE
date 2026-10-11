@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+.ipynb_checkpoints/
+.cache/
+models/trained/*
+models/checkpoints/*
+!models/**/.gitkeep
+*.joblib
+*.pt
+*.bin
