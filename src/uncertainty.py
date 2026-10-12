@@ -196,9 +196,16 @@ class ThresholdOptimizer:
                     best_tau = tau
                     best_delta = delta
 
+        # Fallback if no pair met target_coverage
+        if best_acc < 0:
+            best_pair = max(results, key=lambda x: (x["selective_accuracy"], x["coverage"]))
+            best_tau = best_pair["tau"]
+            best_delta = best_pair["delta"]
+            best_acc = best_pair["selective_accuracy"]
+
         logger.info(
             f"Optimal Thresholds Selected on Validation: tau*={best_tau}, delta*={best_delta} "
-            f"(Selective Acc={best_acc:.4f} at Coverage={results[0]['coverage']:.2%})"
+            f"(Selective Acc={best_acc:.4f})"
         )
 
         return {

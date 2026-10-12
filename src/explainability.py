@@ -100,12 +100,24 @@ class SHAPExplainer:
     ) -> Dict[str, Any]:
         """
         Computes local top FAKE-driving (pushing towards FAKE) and REAL-driving features.
+        Evaluates across lexical (top TF-IDF) and all stylometric/readability features.
         """
         x_dense = np.asarray(x_dense).flatten()
 
         if hasattr(self.model, "feature_importances_"):
-            # Local impact heuristic = x_val * feature_importance
-            impacts = x_dense * self.model.feature_importances_
+            # Tree-based importance weighting
+            imp = self.model.feature_importances_
+            if len(imp) == len(x_dense):
+                impacts = x_dense * imp
+            else:
+                impacts = x_dense
+        elif hasattr(self.model, "coef_"):
+            # Linear model coefficients
+            coef = np.asarray(self.model.coef_).flatten()
+            if len(coef) == len(x_dense):
+                impacts = x_dense * coef
+            else:
+                impacts = x_dense
         else:
             impacts = x_dense
 
@@ -115,11 +127,19 @@ class SHAPExplainer:
         fake_driving_indices = sorted_indices[-top_k:][::-1]  # Most positive / highest
 
         fake_features = [
-            {"feature": self.feature_names[i], "impact": float(impacts[i]), "value": float(x_dense[i])}
+            {
+                "feature": self.feature_names[i] if i < len(self.feature_names) else f"feature_{i}",
+                "impact": float(impacts[i]),
+                "value": float(x_dense[i]),
+            }
             for i in fake_driving_indices
         ]
         real_features = [
-            {"feature": self.feature_names[i], "impact": float(impacts[i]), "value": float(x_dense[i])}
+            {
+                "feature": self.feature_names[i] if i < len(self.feature_names) else f"feature_{i}",
+                "impact": float(impacts[i]),
+                "value": float(x_dense[i]),
+            }
             for i in real_driving_indices
         ]
 

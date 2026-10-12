@@ -42,6 +42,14 @@ class ManifoldBalancingPipeline:
         self.smote = SMOTE(random_state=self.random_state)
         self.is_fitted = False
 
+    def transform(self, X: csr_matrix | np.ndarray) -> np.ndarray:
+        """Projects unseen data to dense SVD space if fitted, else converts to dense."""
+        if self.is_fitted and issparse(X) and X.shape[1] > self.svd_components:
+            return self.svd.transform(X)
+        elif self.is_fitted:
+            return self.svd.transform(X)
+        return X.toarray() if issparse(X) else np.asarray(X)
+
     def balance_training_data(
         self,
         X_train: csr_matrix | np.ndarray,
@@ -55,15 +63,7 @@ class ManifoldBalancingPipeline:
         """
         logger.info(f"Balancing training set: original shape {X_train.shape}, class distribution {np.bincount(y_train)}")
 
-        # Check if already balanced
-        counts = np.bincount(y_train)
-        if len(counts) > 1 and abs(counts[0] - counts[1]) / len(y_train) < 0.02:
-            logger.info("Classes are already well-balanced (<2% difference). Retaining natural training distribution.")
-            if issparse(X_train):
-                return X_train, y_train
-            return X_train, y_train
-
-        # If sparse and dimensional > 500, apply SVD first
+        # Fit TruncatedSVD on training data if high-dimensional, then apply SMOTE
         if issparse(X_train) and X_train.shape[1] > self.svd_components:
             logger.info(f"Fitting TruncatedSVD ({self.svd_components} components) on train split...")
             X_dense = self.svd.fit_transform(X_train)

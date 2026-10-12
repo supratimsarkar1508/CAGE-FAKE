@@ -42,7 +42,16 @@ class SemanticFeatureExtractor:
         self._cache = self._load_cache()
 
     def _load_cache(self) -> dict:
-        """Loads disk cache if it exists."""
+        """Loads disk cache if it exists (.npy or .joblib)."""
+        npy_path = self.cache_path.with_suffix(".npy")
+        if npy_path.exists():
+            try:
+                data = np.load(npy_path, allow_pickle=True).item()
+                if isinstance(data, dict):
+                    return data
+            except Exception as e:
+                logger.warning(f"Failed to load npy cache from {npy_path}: {e}")
+
         if self.cache_path.exists():
             try:
                 return joblib.load(self.cache_path)
@@ -51,10 +60,12 @@ class SemanticFeatureExtractor:
         return {}
 
     def _save_cache(self) -> None:
-        """Persists cache to disk."""
+        """Persists cache to disk in both .joblib and .npy formats."""
         try:
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
             joblib.dump(self._cache, self.cache_path)
+            npy_path = self.cache_path.with_suffix(".npy")
+            np.save(npy_path, self._cache, allow_pickle=True)
         except Exception as e:
             logger.warning(f"Could not persist embeddings cache: {e}")
 

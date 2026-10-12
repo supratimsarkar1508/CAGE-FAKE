@@ -1,0 +1,15 @@
+Setting,Accuracy,Macro-F1,Precision,Recall,ECE,Selective Accuracy,Coverage
+A: Without Calibration,0.8991,0.8991,0.8991,0.8991,0.031,0.8991,1.0
+B: With Calibration,0.8959,0.8959,0.8959,0.8959,0.0408,0.8959,1.0
+C: Confidence-only Gate (tau=0.70),0.8959,0.8959,0.8959,0.8959,0.0408,0.9296,0.8959
+D: Disagreement-only Gate (delta=0.15),0.8959,0.8959,0.8959,0.8959,0.0408,0.8963,0.9732
+E: Full Dual-Trigger CAGE-Fake Gate,0.8959,0.8959,0.8959,0.8959,0.0408,0.931,0.8691
+F: Ablation: Without Stylometric Stream,0.8959,0.8959,0.8959,0.8959,0.0341,0.931,0.8691
+G: Ablation: Without Epistemic Features,0.8959,0.8959,0.8959,0.8959,0.0389,0.931,0.8691
+H: Ablation: Without Sentence-BERT,0.8959,0.8959,0.8959,0.8959,0.0342,0.931,0.8691
+I: Ablation: Without Readability Stream,0.8959,0.8959,0.8959,0.8959,0.0393,0.931,0.8691
+J: Single Best Base Model (LightGBM alone),0.8959,0.8959,0.8961,0.8959,0.0372,0.8959,1.0
+"K1: Strict Threshold: tau=0.80, delta=0.15",0.8959,0.8959,0.8959,0.8959,0.0408,0.9379,0.8123
+"K2: Relaxed Threshold: tau=0.60, delta=0.15",0.8959,0.8959,0.8959,0.8959,0.0408,0.9211,0.9196
+"L1: Strict Disagreement: tau=0.70, delta=0.10",0.8959,0.8959,0.8959,0.8959,0.0408,0.926,0.6183
+"L2: Relaxed Disagreement: tau=0.70, delta=0.25",0.8959,0.8959,0.8959,0.8959,0.0408,0.9296,0.8959

@@ -1,0 +1,142 @@
+[
+    {
+        "Setting": "A: Without Calibration",
+        "Accuracy": 0.8991,
+        "Macro-F1": 0.8991,
+        "Precision": 0.8991,
+        "Recall": 0.8991,
+        "ECE": 0.031,
+        "Selective Accuracy": 0.8991,
+        "Coverage": 1.0
+    },
+    {
+        "Setting": "B: With Calibration",
+        "Accuracy": 0.8959,
+        "Macro-F1": 0.8959,
+        "Precision": 0.8959,
+        "Recall": 0.8959,
+        "ECE": 0.0408,
+        "Selective Accuracy": 0.8959,
+        "Coverage": 1.0
+    },
+    {
+        "Setting": "C: Confidence-only Gate (tau=0.70)",
+        "Accuracy": 0.8959,
+        "Macro-F1": 0.8959,
+        "Precision": 0.8959,
+        "Recall": 0.8959,
+        "ECE": 0.0408,
+        "Selective Accuracy": 0.9296,
+        "Coverage": 0.8959
+    },
+    {
+        "Setting": "D: Disagreement-only Gate (delta=0.15)",
+        "Accuracy": 0.8959,
+        "Macro-F1": 0.8959,
+        "Precision": 0.8959,
+        "Recall": 0.8959,
+        "ECE": 0.0408,
+        "Selective Accuracy": 0.8963,
+        "Coverage": 0.9732
+    },
+    {
+        "Setting": "E: Full Dual-Trigger CAGE-Fake Gate",
+        "Accuracy": 0.8959,
+        "Macro-F1": 0.8959,
+        "Precision": 0.8959,
+        "Recall": 0.8959,
+        "ECE": 0.0408,
+        "Selective Accuracy": 0.931,
+        "Coverage": 0.8691
+    },
+    {
+        "Setting": "F: Ablation: Without Stylometric Stream",
+        "Accuracy": 0.8959,
+        "Macro-F1": 0.8959,
+        "Precision": 0.8959,
+        "Recall": 0.8959,
+        "ECE": 0.0341,
+        "Selective Accuracy": 0.931,
+        "Coverage": 0.8691
+    },
+    {
+        "Setting": "G: Ablation: Without Epistemic Features",
+        "Accuracy": 0.8959,
+        "Macro-F1": 0.8959,
+        "Precision": 0.8959,
+        "Recall": 0.8959,
+        "ECE": 0.0389,
+        "Selective Accuracy": 0.931,
+        "Coverage": 0.8691
+    },
+    {
+        "Setting": "H: Ablation: Without Sentence-BERT",
+        "Accuracy": 0.8959,
+        "Macro-F1": 0.8959,
+        "Precision": 0.8959,
+        "Recall": 0.8959,
+        "ECE": 0.0342,
+        "Selective Accuracy": 0.931,
+        "Coverage": 0.8691
+    },
+    {
+        "Setting": "I: Ablation: Without Readability Stream",
+        "Accuracy": 0.8959,
+        "Macro-F1": 0.8959,
+        "Precision": 0.8959,
+        "Recall": 0.8959,
+        "ECE": 0.0393,
+        "Selective Accuracy": 0.931,
+        "Coverage": 0.8691
+    },
+    {
+        "Setting": "J: Single Best Base Model (LightGBM alone)",
+        "Accuracy": 0.8959,
+        "Macro-F1": 0.8959,
+        "Precision": 0.8961,
+        "Recall": 0.8959,
+        "ECE": 0.0372,
+        "Selective Accuracy": 0.8959,
+        "Coverage": 1.0
+    },
+    {
+        "Setting": "K1: Strict Threshold: tau=0.80, delta=0.15",
+        "Accuracy": 0.8959,
+        "Macro-F1": 0.8959,
+        "Precision": 0.8959,
+        "Recall": 0.8959,
+        "ECE": 0.0408,
+        "Selective Accuracy": 0.9379,
+        "Coverage": 0.8123
+    },
+    {
+        "Setting": "K2: Relaxed Threshold: tau=0.60, delta=0.15",
+        "Accuracy": 0.8959,
+        "Macro-F1": 0.8959,
+        "Precision": 0.8959,
+        "Recall": 0.8959,
+        "ECE": 0.0408,
+        "Selective Accuracy": 0.9211,
+        "Coverage": 0.9196
+    },
+    {
+        "Setting": "L1: Strict Disagreement: tau=0.70, delta=0.10",
+        "Accuracy": 0.8959,
+        "Macro-F1": 0.8959,
+        "Precision": 0.8959,
+        "Recall": 0.8959,
+        "ECE": 0.0408,
+        "Selective Accuracy": 0.926,
+        "Coverage": 0.6183
+    },
+    {
+        "Setting": "L2: Relaxed Disagreement: tau=0.70, delta=0.25",
+        "Accuracy": 0.8959,
+        "Macro-F1": 0.8959,
+        "Precision": 0.8959,
+        "Recall": 0.8959,
+        "ECE": 0.0408,
+        "Selective Accuracy": 0.9296,
+        "Coverage": 0.8959
+    }
+]

@@ -1,0 +1,57 @@
+[
+    {
+        "model_name": "Random Forest",
+        "accuracy": 0.8927,
+        "macro_f1": 0.8926,
+        "precision": 0.8946,
+        "recall": 0.8929,
+        "ece": 0.1866,
+        "training_time_s": 0.0,
+        "coverage": 1.0,
+        "selective_accuracy": 0.8927
+    },
+    {
+        "model_name": "XGBoost",
+        "accuracy": 0.8864,
+        "macro_f1": 0.8864,
+        "precision": 0.8868,
+        "recall": 0.8865,
+        "ece": 0.0474,
+        "training_time_s": 0.0,
+        "coverage": 1.0,
+        "selective_accuracy": 0.8864
+    },
+    {
+        "model_name": "LightGBM",
+        "accuracy": 0.8959,
+        "macro_f1": 0.8959,
+        "precision": 0.8961,
+        "recall": 0.8959,
+        "ece": 0.0372,
+        "training_time_s": 0.0,
+        "coverage": 1.0,
+        "selective_accuracy": 0.8959
+    },
+    {
+        "model_name": "Uncalibrated Stack",
+        "accuracy": 0.8991,
+        "macro_f1": 0.8991,
+        "precision": 0.8991,
+        "recall": 0.8991,
+        "ece": 0.031,
+        "training_time_s": 0.0,
+        "coverage": 1.0,
+        "selective_accuracy": 0.8991
+    },
+    {
+        "model_name": "CAGE-Fake (Calibrated + Gated)",
+        "accuracy": 0.8959,
+        "macro_f1": 0.8959,
+        "precision": 0.8959,
+        "recall": 0.8959,
+        "ece": 0.0408,
+        "training_time_s": 0.0,
+        "coverage": 0.8375,
+        "selective_accuracy": 0.936
+    }
+]

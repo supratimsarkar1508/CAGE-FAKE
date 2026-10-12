@@ -38,28 +38,38 @@ def evaluate_predictions(
     f1 = f1_score(y_true, y_pred, average="macro")
     prec = precision_score(y_true, y_pred, average="macro", zero_division=0)
     rec = recall_score(y_true, y_pred, average="macro", zero_division=0)
-    
+
+    from src.calibration import compute_ece
+    ece_val = None
+    if p_pred is not None:
+        ece_val, _ = compute_ece(y_true, p_pred)
+        ece_val = round(float(ece_val), 4)
+
     metrics = {
         "model_name": model_name,
         "accuracy": round(acc, 4),
         "macro_f1": round(f1, 4),
         "precision": round(prec, 4),
         "recall": round(rec, 4),
+        "ece": ece_val,
         "training_time_s": round(training_time, 2),
     }
-    
+
     if accepted_mask is not None:
         n_accepted = int(np.sum(accepted_mask))
         coverage = n_accepted / n_total if n_total > 0 else 0.0
-        
+
         if n_accepted > 0:
             sel_acc = accuracy_score(y_true[accepted_mask], y_pred[accepted_mask])
         else:
             sel_acc = 1.0
-            
+
         metrics["coverage"] = round(coverage, 4)
         metrics["selective_accuracy"] = round(sel_acc, 4)
-        
+    else:
+        metrics["coverage"] = 1.0
+        metrics["selective_accuracy"] = round(acc, 4)
+
     return metrics
 
 def plot_confusion_matrix(

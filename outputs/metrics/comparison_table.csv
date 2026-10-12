@@ -1,0 +1,6 @@
+model_name,accuracy,macro_f1,precision,recall,ece,training_time_s,coverage,selective_accuracy
+Random Forest,0.8927,0.8926,0.8946,0.8929,0.1866,0.0,1.0,0.8927
+XGBoost,0.8864,0.8864,0.8868,0.8865,0.0474,0.0,1.0,0.8864
+LightGBM,0.8959,0.8959,0.8961,0.8959,0.0372,0.0,1.0,0.8959
+Uncalibrated Stack,0.8991,0.8991,0.8991,0.8991,0.031,0.0,1.0,0.8991
+CAGE-Fake (Calibrated + Gated),0.8959,0.8959,0.8959,0.8959,0.0408,0.0,0.8375,0.936

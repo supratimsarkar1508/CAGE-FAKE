@@ -1,0 +1,6 @@
+{
+    "locked_tau": 0.8,
+    "locked_delta": 0.2,
+    "val_selective_acc": 0.9397363465160076,
+    "target_coverage": 0.8
+}
