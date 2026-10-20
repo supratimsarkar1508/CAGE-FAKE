@@ -1,0 +1,2 @@
+confidence_threshold_tau,disagreement_threshold_delta,is_dual_subset_of_conf,n_accepted_confidence_only,n_accepted_dual_trigger,n_set_difference_abstained_by_disagreement,difference_errors_prevented,difference_correct_rejected,disagreement_rejected_error_rate
+0.8,0.2,True,519,516,3,0,3,0.0

@@ -1,0 +1,46 @@
+{
+    "description": "Partition audit manifest recording sample counts, SHA-256 partition root digests, class balances, and pairwise zero-overlap verification.",
+    "random_seed": 42,
+    "ratios": {
+        "train": 0.7,
+        "val": 0.1,
+        "calib": 0.1,
+        "test": 0.1
+    },
+    "counts": {
+        "train": 4265,
+        "val": 609,
+        "calib": 610,
+        "test": 610,
+        "total": 6094
+    },
+    "sha256_unique_hash_counts": {
+        "train": 4265,
+        "val": 609,
+        "calib": 610,
+        "test": 610
+    },
+    "partition_sha256_root_digests": {
+        "train": "33b79654389156de55bd595bd63f70027a97421aa4918ca8e555109a0eaa6111",
+        "val": "a420e3130fc2b3699dca52c69548f8b349975f5ccd5793cb78d3579fe18423da",
+        "calib": "e84cea0df306c6ae36777224d48d6ea05cbec89107f5040dca3cc5b7ca8079ef",
+        "test": "25769532fc8048c8f4977f1f90cc0630347ffb6e02e6b834fdf9f6dc7c5b7ce5"
+    },
+    "pairwise_overlap_counts": {
+        "train_val": 0,
+        "train_calib": 0,
+        "train_test": 0,
+        "val_calib": 0,
+        "val_test": 0,
+        "calib_test": 0
+    },
+    "class_balance_fake_pct": {
+        "train": 50.95,
+        "val": 50.9,
+        "calib": 50.98,
+        "test": 50.98,
+        "full_dataset": 50.95
+    },
+    "conflicting_duplicate_bodies_count": 0,
+    "zero_overlap_verified": true
+}

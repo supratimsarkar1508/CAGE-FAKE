@@ -31,8 +31,8 @@ logger = setup_logger("balancing")
 
 class ManifoldBalancingPipeline:
     """
-    Applies SMOTE exclusively on training data after projecting high-dimensional
-    sparse features via TruncatedSVD to prevent distance metric degradation.
+    Applies TruncatedSVD dimensionality reduction on high-dimensional sparse text representations,
+    and provides optional SMOTE oversampling exclusively on training data manifolds.
     """
 
     def __init__(self, svd_components: int = SVD_COMPONENTS, random_state: int = RANDOM_SEED):
@@ -42,38 +42,58 @@ class ManifoldBalancingPipeline:
         self.smote = SMOTE(random_state=self.random_state)
         self.is_fitted = False
 
+    def fit(self, X_train: csr_matrix | np.ndarray) -> "ManifoldBalancingPipeline":
+        """Fits TruncatedSVD strictly on the training partition."""
+        if issparse(X_train) and X_train.shape[1] > self.svd_components:
+            logger.info(f"Fitting TruncatedSVD ({self.svd_components} components) on train split...")
+            self.svd.fit(X_train)
+            self.is_fitted = True
+        else:
+            self.is_fitted = False
+        return self
+
     def transform(self, X: csr_matrix | np.ndarray) -> np.ndarray:
-        """Projects unseen data to dense SVD space if fitted, else converts to dense."""
-        if self.is_fitted and issparse(X) and X.shape[1] > self.svd_components:
-            return self.svd.transform(X)
-        elif self.is_fitted:
-            return self.svd.transform(X)
-        return X.toarray() if issparse(X) else np.asarray(X)
+        """Projects unseen data to dense SVD space if fitted, else converts to dense array."""
+        if self.is_fitted:
+            return self.svd.transform(X).astype(np.float32)
+        return X.toarray().astype(np.float32) if issparse(X) else np.asarray(X, dtype=np.float32)
+
+    def fit_transform(self, X_train: csr_matrix | np.ndarray) -> np.ndarray:
+        """Fits TruncatedSVD on X_train and returns dense projection."""
+        self.fit(X_train)
+        return self.transform(X_train)
 
     def balance_training_data(
         self,
         X_train: csr_matrix | np.ndarray,
         y_train: np.ndarray,
+        apply_smote: bool = True,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Balances training split:
-        1. Projects sparse matrix X_train to dense SVD manifold.
-        2. Applies SMOTE to synthesize minority class instances.
-        Returns: (X_train_balanced_dense, y_train_balanced)
+        1. Projects sparse matrix X_train to dense SVD manifold (strictly on train split).
+        2. If apply_smote=True, applies SMOTE on the dense representation.
+           If classes are already naturally balanced (e.g. 50.9% vs 49.1%), notes that SMOTE
+           synthesizes very few points.
+        Returns: (X_train_dense, y_train_dense)
         """
-        logger.info(f"Balancing training set: original shape {X_train.shape}, class distribution {np.bincount(y_train)}")
+        counts = np.bincount(y_train)
+        logger.info(f"Training split class distribution: {counts} ({counts[1]/len(y_train)*100:.1f}% minority/majority)")
 
-        # Fit TruncatedSVD on training data if high-dimensional, then apply SMOTE
-        if issparse(X_train) and X_train.shape[1] > self.svd_components:
-            logger.info(f"Fitting TruncatedSVD ({self.svd_components} components) on train split...")
-            X_dense = self.svd.fit_transform(X_train)
-            self.is_fitted = True
+        # Step 1: Dense Projection
+        if not self.is_fitted:
+            X_dense = self.fit_transform(X_train)
+        else:
+            X_dense = self.transform(X_train)
+
+        # Step 2: SMOTE (if requested)
+        if apply_smote:
+            diff = abs(counts[0] - counts[1])
+            if diff < len(y_train) * 0.05:
+                logger.info(f"Dataset is naturally balanced (difference = {diff} samples out of {len(y_train)}).")
             logger.info("Applying SMOTE on dense SVD projection...")
             X_bal, y_bal = self.smote.fit_resample(X_dense, y_train)
             logger.info(f"Balanced training set shape: {X_bal.shape}, class distribution {np.bincount(y_bal)}")
-            return X_bal, y_bal
-        else:
-            X_dense = X_train.toarray() if issparse(X_train) else X_train
-            X_bal, y_bal = self.smote.fit_resample(X_dense, y_train)
-            logger.info(f"Balanced training set shape: {X_bal.shape}, class distribution {np.bincount(y_bal)}")
-            return X_bal, y_bal
+            return X_bal.astype(np.float32), y_bal.astype(int)
+
+        return X_dense.astype(np.float32), y_train.astype(int)

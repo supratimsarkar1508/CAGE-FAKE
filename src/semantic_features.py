@@ -75,7 +75,10 @@ class SemanticFeatureExtractor:
             logger.info(f"Loading Sentence-Transformer model: '{self.model_name}'...")
             try:
                 from sentence_transformers import SentenceTransformer
-                self.model = SentenceTransformer(self.model_name)
+                try:
+                    self.model = SentenceTransformer(self.model_name, local_files_only=True)
+                except Exception:
+                    self.model = SentenceTransformer(self.model_name)
             except Exception as e:
                 logger.error(f"Error loading SentenceTransformer: {e}")
                 raise
