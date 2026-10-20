@@ -1,9 +1,9 @@
 """
 CAGE-Fake: Uncertainty Gate and Threshold Sweep Module
-Triple-trigger gating mechanism:
-1. Low Confidence: max(p, 1-p) < tau -> UNCERTAIN
-2. High Disagreement: std(p_lgbm, p_rf, p_xgb) > delta -> UNCERTAIN
-3. Evidence Conflict: Hook for third trigger (evidence_conflict is None -> disabled)
+Dual-Signal Uncertainty Gating Mechanism (with optional Evidence Hook):
+1. Low Confidence Trigger: max(p, 1-p) < tau -> UNCERTAIN
+2. High Disagreement Trigger: std(p_rf, p_xgb, p_lgbm, p_lr) > delta -> UNCERTAIN
+3. Evidence Conflict Hook: Optional interface for external fact-verification conflict score
 
 Includes grid sweep across (tau, delta) Pareto frontier on validation/calibration splits,
 and generates Risk-Coverage curves.
@@ -45,39 +45,67 @@ class UncertaintyGate:
         evidence_conflict: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
-        Evaluates gate on a single article.
-        Returns detailed decision dictionary.
+        Evaluates gate on a single article using:
+        1. Calibrated confidence: max(p, 1-p)
+        2. Base-model disagreement: std across 4 base learners (RF, XGB, LGBM, LR)
+        3. Optional external evidence conflict hook
+
+        Identifies:
+        - 'both_triggers' when confidence < tau AND disagreement > delta
+        - 'low_confidence' when confidence < tau and disagreement <= delta
+        - 'high_disagreement' when confidence >= tau and disagreement > delta
+        - 'evidence_conflict' when external conflict > 0.5
+        - 'none' when neither condition triggers (verdict is accepted as REAL or FAKE)
         """
         confidence = float(max(p_calibrated, 1.0 - p_calibrated))
         disagreement = float(disagreement)
 
-        # Trigger 1: Insufficient statistical confidence
-        if confidence < self.tau:
+        is_low_conf = confidence < self.tau
+        is_high_dis = disagreement > self.delta
+        is_ev_conflict = evidence_conflict is not None and evidence_conflict > 0.5
+
+        if is_low_conf and is_high_dis:
+            decision = "UNCERTAIN"
+            trigger = "both_triggers"
+            explanation = (
+                f"Both safety triggers active: Calibrated confidence ({confidence:.1%}) is below threshold tau "
+                f"({self.tau:.1%}), AND base-model disagreement ({disagreement:.3f}) exceeds threshold delta ({self.delta:.3f})."
+            )
+        elif is_low_conf:
             decision = "UNCERTAIN"
             trigger = "low_confidence"
-            explanation = f"Confidence ({confidence:.1%}) is below threshold tau ({self.tau:.1%})."
-        # Trigger 2: High inter-model ensemble disagreement
-        elif disagreement > self.delta:
+            explanation = (
+                f"Confidence ({confidence:.1%}) is below threshold tau ({self.tau:.1%}); "
+                f"base-model disagreement ({disagreement:.3f}) is within threshold delta ({self.delta:.3f})."
+            )
+        elif is_high_dis:
             decision = "UNCERTAIN"
             trigger = "high_disagreement"
-            explanation = f"Base model disagreement ({disagreement:.3f}) exceeds threshold delta ({self.delta:.3f})."
-        # Trigger 3: External evidence conflict (hook)
-        elif evidence_conflict is not None and evidence_conflict > 0.5:
+            explanation = (
+                f"Base-model disagreement ({disagreement:.3f}) exceeds threshold delta ({self.delta:.3f}); "
+                f"calibrated confidence is {confidence:.1%}."
+            )
+        elif is_ev_conflict:
             decision = "UNCERTAIN"
             trigger = "evidence_conflict"
             explanation = f"Conflict with verified external evidence detected ({evidence_conflict:.2f})."
-        # Decision reached
         else:
             decision = "FAKE" if p_calibrated >= 0.5 else "REAL"
             trigger = "none"
-            explanation = f"High confidence ({confidence:.1%}) and low model disagreement ({disagreement:.3f})."
+            explanation = f"High confidence ({confidence:.1%}) and acceptable base-model disagreement ({disagreement:.3f})."
 
         return {
             "decision": decision,
             "trigger": trigger,
+            "is_accepted": decision != "UNCERTAIN",
+            "is_low_confidence": is_low_conf,
+            "is_high_disagreement": is_high_dis,
+            "is_evidence_conflict": is_ev_conflict,
             "confidence": confidence,
             "disagreement": disagreement,
             "p_calibrated": p_calibrated,
+            "tau": self.tau,
+            "delta": self.delta,
             "explanation": explanation,
             "evidence_conflict_available": evidence_conflict is not None,
             "evidence_note": (
@@ -108,15 +136,23 @@ class UncertaintyGate:
             d = dis[i]
             ev = evidence_conflicts[i] if evidence_conflicts is not None else None
 
-            if conf < self.tau:
+            is_lc = conf < self.tau
+            is_hd = d > self.delta
+            is_ev = ev is not None and ev > 0.5
+
+            if is_lc and is_hd:
+                decisions.append("UNCERTAIN")
+                triggers.append("both_triggers")
+                is_accepted[i] = False
+            elif is_lc:
                 decisions.append("UNCERTAIN")
                 triggers.append("low_confidence")
                 is_accepted[i] = False
-            elif d > self.delta:
+            elif is_hd:
                 decisions.append("UNCERTAIN")
                 triggers.append("high_disagreement")
                 is_accepted[i] = False
-            elif ev is not None and ev > 0.5:
+            elif is_ev:
                 decisions.append("UNCERTAIN")
                 triggers.append("evidence_conflict")
                 is_accepted[i] = False

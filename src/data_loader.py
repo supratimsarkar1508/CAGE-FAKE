@@ -47,7 +47,7 @@ def auto_detect_columns(df: pd.DataFrame) -> Tuple[str, str, str]:
     if label_col is None:
         raise ValueError("Could not auto-detect the label column in the dataset.")
 
-    candidate_text_cols = [c for c in columns if c != label_col]
+    candidate_text_cols = [c for c in columns if c != label_col and not str(c).lower().startswith("unnamed")]
 
     # 2. Detect Title column
     title_col = None
@@ -83,11 +83,17 @@ def auto_detect_columns(df: pd.DataFrame) -> Tuple[str, str, str]:
 
 def inspect_dataset(df: pd.DataFrame, title_col: str, body_col: str, label_col: str) -> Dict[str, Any]:
     """
-    Computes and logs comprehensive dataset statistics.
+    Computes and logs comprehensive dataset statistics, clearly distinguishing
+    different categories of duplicate content and missing values.
     """
     total_rows, total_cols = df.shape
     missing_counts = df.isnull().sum().to_dict()
-    duplicates_count = int(df.duplicated().sum())
+
+    # Exact duplicate analysis
+    exact_duplicates_count = int(df.duplicated().sum())
+    duplicate_title_body_pairs = int(df.duplicated(subset=[title_col, body_col]).sum())
+    duplicate_body_only = int(df.duplicated(subset=[body_col]).sum())
+    duplicate_title_only = int(df.duplicated(subset=[title_col]).sum())
 
     # Standardize label representation for metrics
     label_series = df[label_col].astype(str).str.strip().str.upper()
@@ -98,14 +104,21 @@ def inspect_dataset(df: pd.DataFrame, title_col: str, body_col: str, label_col: 
         "shape": (total_rows, total_cols),
         "columns": list(df.columns),
         "missing_counts": missing_counts,
-        "duplicates_count": duplicates_count,
+        "exact_duplicates_count": exact_duplicates_count,
+        "duplicate_title_body_pairs": duplicate_title_body_pairs,
+        "duplicate_body_only": duplicate_body_only,
+        "duplicate_title_only": duplicate_title_only,
         "class_counts": class_counts,
         "class_percentages": class_percentages,
     }
 
-    logger.info(f"Dataset Shape: {total_rows} rows x {total_cols} columns")
+    logger.info(f"Dataset Raw Shape: {total_rows} rows x {total_cols} columns")
     logger.info(f"Missing Values: {missing_counts}")
-    logger.info(f"Duplicate Rows: {duplicates_count}")
+    logger.info(
+        f"Duplicate Breakdown -> Exact Rows: {exact_duplicates_count}, "
+        f"Title+Body Pairs: {duplicate_title_body_pairs}, "
+        f"Body-Only: {duplicate_body_only}, Title-Only: {duplicate_title_only}"
+    )
     logger.info(f"Class Balance: {class_percentages}% ({class_counts})")
 
     return stats
@@ -113,7 +126,8 @@ def inspect_dataset(df: pd.DataFrame, title_col: str, body_col: str, label_col: 
 def load_and_standardize_data(csv_path: Path | str = DATA_PATH) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
     Loads raw CSV, auto-detects columns, standardizes labels (1=FAKE, 0=REAL),
-    fills missing text with headline fallback, and returns standardized DataFrame.
+    handles missing values, distinguishes duplicate categories, and deduplicates
+    to guarantee zero train-test leakage.
     """
     csv_path = Path(csv_path)
     if not csv_path.exists():
@@ -131,8 +145,10 @@ def load_and_standardize_data(csv_path: Path | str = DATA_PATH) -> Tuple[pd.Data
 
     # Fallback: if body is empty or whitespace, use title
     empty_body_mask = standardized_df["body"].str.len() == 0
-    if empty_body_mask.sum() > 0:
-        logger.warning(f"Filling {empty_body_mask.sum()} empty body texts with corresponding title.")
+    empty_body_count = int(empty_body_mask.sum())
+    stats["empty_body_fallback_count"] = empty_body_count
+    if empty_body_count > 0:
+        logger.warning(f"Filling {empty_body_count} empty body texts with corresponding title.")
         standardized_df.loc[empty_body_mask, "body"] = standardized_df.loc[empty_body_mask, "title"]
 
     # Map labels: 1 = FAKE, 0 = REAL
@@ -141,19 +157,66 @@ def load_and_standardize_data(csv_path: Path | str = DATA_PATH) -> Tuple[pd.Data
         "FAKE": 1,
         "1": 1,
         "1.0": 1,
-        "TRUE": 1,   # if target refers to fake as positive class
+        "TRUE": 1,
         "REAL": 0,
         "0": 0,
         "0.0": 0,
         "FALSE": 0,
     }
-    # Check if target is explicitly FAKE/REAL
-    if set(raw_labels.unique()).issubset({"FAKE", "REAL"}):
-        standardized_df["target"] = raw_labels.map({"FAKE": 1, "REAL": 0})
-        standardized_df["target_name"] = raw_labels
+
+    # Strict label validation: reject unrecognized labels to prevent silent coercion to REAL
+    unrecognized = [lbl for lbl in raw_labels.unique() if lbl not in label_map]
+    if unrecognized:
+        raise ValueError(
+            f"Unrecognized class label(s) detected in column '{label_col}': {unrecognized}. "
+            f"Expected one of: {sorted(list(label_map.keys()))}. "
+            f"Unmapped labels are rejected to prevent silent misclassification as REAL."
+        )
+
+    standardized_df["target"] = raw_labels.map(label_map)
+    standardized_df["target_name"] = standardized_df["target"].map({1: "FAKE", 0: "REAL"})
+
+    # Drop non-informative empty records (both title and body empty)
+    non_empty_mask = (standardized_df["title"].str.len() > 0) | (standardized_df["body"].str.len() > 0)
+    standardized_df = standardized_df[non_empty_mask].reset_index(drop=True)
+
+    # Detect duplicate bodies with conflicting labels (Policy: Discard conflicting clusters)
+    body_label_groups = standardized_df.groupby("body")["target"].nunique()
+    conflicting_bodies = set(body_label_groups[body_label_groups > 1].index)
+    conflict_count = len(conflicting_bodies)
+    stats["conflicting_duplicate_bodies_count"] = conflict_count
+
+    if conflict_count > 0:
+        logger.warning(
+            f"Detected {conflict_count} duplicate body cluster(s) with conflicting veracity labels. "
+            f"Policy: Discarding all conflicting occurrences to prevent contradictory supervision."
+        )
+        standardized_df = standardized_df[~standardized_df["body"].isin(conflicting_bodies)].reset_index(drop=True)
     else:
-        standardized_df["target"] = raw_labels.map(lambda x: label_map.get(x, 0))
-        standardized_df["target_name"] = standardized_df["target"].map({1: "FAKE", 0: "REAL"})
+        logger.info("Conflicting duplicate bodies check: 0 conflicting label clusters detected.")
+
+    # Handle duplicates to prevent leakage across splits (retain first clean occurrence)
+    initial_len = len(standardized_df)
+    standardized_df = standardized_df.drop_duplicates(subset=["body"]).reset_index(drop=True)
+    dropped_dupes = initial_len - len(standardized_df)
+    stats["deduplicated_dropped_count"] = dropped_dupes
+    stats["final_clean_rows"] = len(standardized_df)
+
+    # Recompute clean class counts and percentages on final clean dataset
+    clean_counts = standardized_df["target_name"].value_counts().to_dict()
+    clean_percentages = {k: round(v / len(standardized_df) * 100, 2) for k, v in clean_counts.items()}
+    stats["raw_class_counts"] = dict(stats["class_counts"])
+    stats["raw_class_percentages"] = dict(stats["class_percentages"])
+    stats["clean_class_counts"] = clean_counts
+    stats["clean_class_percentages"] = clean_percentages
+    stats["class_counts"] = clean_counts
+    stats["class_percentages"] = clean_percentages
+
+    if dropped_dupes > 0:
+        logger.info(
+            f"Deduplication: removed {dropped_dupes} duplicate body texts to prevent train-test data leakage. "
+            f"Final clean unique articles: {len(standardized_df)} | Clean Class Counts: {clean_counts} ({clean_percentages}%)"
+        )
 
     return standardized_df, stats
 
@@ -164,11 +227,17 @@ def create_stratified_splits(
     calib_ratio: float = CALIBRATION_RATIO,
     test_ratio: float = TEST_RATIO,
     seed: int = RANDOM_SEED,
+    save_manifest: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Creates strict 4-way stratified splits: 70 train / 10 val / 10 calibration / 10 test.
     Ensures calibration is never touched during training and test remains untouched until final eval.
+    Generates a cryptographic split manifest verifying zero leakage.
     """
+    import hashlib
+    import json
+    from config import METRICS_DIR
+
     assert np.isclose(train_ratio + val_ratio + calib_ratio + test_ratio, 1.0), "Split ratios must sum to 1.0"
 
     # Step 1: Split into Train (70%) and Temp (30%)
@@ -181,7 +250,6 @@ def create_stratified_splits(
     )
 
     # Step 2: Split Temp (30%) into Val (10%), Calib (10%), Test (10%)
-    # Out of temp: val is 1/3, calib is 1/3, test is 1/3
     val_size_in_temp = val_ratio / temp_ratio
     val_df, remaining_temp_df = train_test_split(
         temp_df,
@@ -197,6 +265,81 @@ def create_stratified_splits(
         stratify=remaining_temp_df["target"],
         random_state=seed,
     )
+
+    # Cryptographic verification of zero partition overlap
+    def hash_text(t: str) -> str:
+        return hashlib.sha256(t.strip().encode("utf-8", errors="replace")).hexdigest()
+
+    train_hashes = set(train_df["body"].map(hash_text))
+    val_hashes = set(val_df["body"].map(hash_text))
+    calib_hashes = set(calib_df["body"].map(hash_text))
+    test_hashes = set(test_df["body"].map(hash_text))
+
+    assert len(train_hashes.intersection(val_hashes)) == 0, "Leakage detected: train intersects val"
+    assert len(train_hashes.intersection(calib_hashes)) == 0, "Leakage detected: train intersects calib"
+    assert len(train_hashes.intersection(test_hashes)) == 0, "Leakage detected: train intersects test"
+    assert len(val_hashes.intersection(calib_hashes)) == 0, "Leakage detected: val intersects calib"
+    assert len(val_hashes.intersection(test_hashes)) == 0, "Leakage detected: val intersects test"
+    assert len(calib_hashes.intersection(test_hashes)) == 0, "Leakage detected: calib intersects test"
+
+    def partition_root_digest(h_set: set) -> str:
+        return hashlib.sha256("".join(sorted(list(h_set))).encode("utf-8")).hexdigest()
+
+    manifest = {
+        "description": "Partition audit manifest recording sample counts, SHA-256 partition root digests, class balances, and pairwise zero-overlap verification.",
+        "random_seed": seed,
+        "ratios": {
+            "train": train_ratio,
+            "val": val_ratio,
+            "calib": calib_ratio,
+            "test": test_ratio,
+        },
+        "counts": {
+            "train": len(train_df),
+            "val": len(val_df),
+            "calib": len(calib_df),
+            "test": len(test_df),
+            "total": len(df),
+        },
+        "sha256_unique_hash_counts": {
+            "train": len(train_hashes),
+            "val": len(val_hashes),
+            "calib": len(calib_hashes),
+            "test": len(test_hashes),
+        },
+        "partition_sha256_root_digests": {
+            "train": partition_root_digest(train_hashes),
+            "val": partition_root_digest(val_hashes),
+            "calib": partition_root_digest(calib_hashes),
+            "test": partition_root_digest(test_hashes),
+        },
+        "pairwise_overlap_counts": {
+            "train_val": len(train_hashes.intersection(val_hashes)),
+            "train_calib": len(train_hashes.intersection(calib_hashes)),
+            "train_test": len(train_hashes.intersection(test_hashes)),
+            "val_calib": len(val_hashes.intersection(calib_hashes)),
+            "val_test": len(val_hashes.intersection(test_hashes)),
+            "calib_test": len(calib_hashes.intersection(test_hashes)),
+        },
+        "class_balance_fake_pct": {
+            "train": round(float(train_df["target"].mean() * 100), 2),
+            "val": round(float(val_df["target"].mean() * 100), 2),
+            "calib": round(float(calib_df["target"].mean() * 100), 2),
+            "test": round(float(test_df["target"].mean() * 100), 2),
+            "full_dataset": round(float(df["target"].mean() * 100), 2),
+        },
+        "conflicting_duplicate_bodies_count": 0,
+        "zero_overlap_verified": True,
+    }
+
+    if save_manifest:
+        try:
+            METRICS_DIR.mkdir(parents=True, exist_ok=True)
+            with open(METRICS_DIR / "split_manifest.json", "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=4)
+            logger.info(f"Split manifest saved to {METRICS_DIR / 'split_manifest.json'}")
+        except Exception as e:
+            logger.warning(f"Could not save split manifest: {e}")
 
     logger.info(
         f"Stratified Splits Created -> Train: {len(train_df)} ({train_df['target'].mean()*100:.1f}% FAKE), "
