@@ -511,3 +511,101 @@ paragraph text '<para><b>Diagnostic Explanation:</b><br/>1. Decision & Triage St
 [2026-10-20 20:01:06] [INFO] [run_pipeline]: [RESUME] Loading explainability explainer from cache...
 [2026-10-20 20:01:06] [INFO] [run_pipeline]: >>> STAGE 14: Synthesizing Final Comprehensive Markdown Report
 [2026-10-20 20:01:06] [INFO] [run_pipeline]: Final report saved to C:\Users\khyat\OneDrive\Desktop\cagefake_nlp\CAGE-FAKE\outputs\reports\final_report.md
+[2026-10-24 00:39:01] [INFO] [run_pipeline]: ==================================================
+[2026-10-24 00:39:01] [INFO] [run_pipeline]: CAGE-FAKE PIPELINE TRAINING STARTED
+[2026-10-24 00:39:01] [INFO] [run_pipeline]: Parameters: sample=None, skip_transformer=True, force=False
+[2026-10-24 00:39:01] [INFO] [run_pipeline]: ==================================================
+[2026-10-24 00:39:01] [INFO] [run_pipeline]: >>> STAGE 1: Data Loader & Stratified Partitioning
+[2026-10-24 00:39:01] [INFO] [run_pipeline]: [STAGE COMPLETE] Data loaded and partitioned in 0.70s
+[2026-10-24 00:39:01] [INFO] [run_pipeline]: >>> STAGE 2: Preprocessing (Raw + Clean Text & Linguistic Properties)
+[2026-10-24 00:39:07] [INFO] [run_pipeline]: [STAGE COMPLETE] Preprocessing finished in 5.77s
+[2026-10-24 00:39:07] [INFO] [run_pipeline]: >>> STAGE 3: Unified Feature Extraction (Streams A: Lexical, B: Semantic, C: Stylometric, D: Readability)
+[2026-10-24 00:39:39] [INFO] [run_pipeline]: Combined Feature Matrix Shape: (4265, 10408) (Total dimensions: 10408)
+[2026-10-24 00:39:40] [INFO] [run_pipeline]: [STAGE COMPLETE] Feature extraction finished in 32.59s
+[2026-10-24 00:39:40] [INFO] [run_pipeline]: >>> STAGE 4: Dimensionality Reduction (TruncatedSVD fitted on TRAIN)
+[2026-10-24 00:39:43] [INFO] [run_pipeline]: [STAGE COMPLETE] SVD transformation finished in 3.26s
+[2026-10-24 00:39:43] [INFO] [run_pipeline]: >>> STAGE 5: Training Heterogeneous Base Learners (Random Forest, XGBoost, LightGBM, Logistic Regression)
+[2026-10-24 00:39:47] [INFO] [run_pipeline]: [STAGE COMPLETE] Base learners trained in 3.98s
+[2026-10-24 00:39:47] [INFO] [run_pipeline]: >>> STAGE 6: Leakage-Free OOF Stacking Meta-Learner (4 Base Models + Disagreement)
+[2026-10-24 00:39:58] [INFO] [run_pipeline]: [STAGE COMPLETE] Stacking meta-learner trained in 11.00s
+[2026-10-24 00:39:58] [INFO] [run_pipeline]: >>> STAGE 7: Isolated Post-Hoc Calibration (Platt Scaling per Model on Calibration Split)
+[2026-10-24 00:39:58] [INFO] [run_pipeline]: [STAGE COMPLETE] Calibration completed in 0.14s
+[2026-10-24 00:39:58] [INFO] [run_pipeline]: >>> STAGE 8 & 9: Uncertainty Gating & (tau, delta) Pareto Threshold Sweep on Validation
+[2026-10-24 00:39:58] [INFO] [run_pipeline]: Locked thresholds successfully saved to C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\outputs\metrics\locked_thresholds.json: {'locked_tau': 0.8, 'locked_delta': 0.2, 'val_selective_acc': 0.9571984435797666, 'target_coverage': 0.8}
+[2026-10-24 00:39:59] [INFO] [run_pipeline]: [STAGE COMPLETE] Thresholds optimized in 0.40s
+[2026-10-24 00:39:59] [INFO] [run_pipeline]: >>> STAGE 10: Explainability (Meta-Model Attribution & Empirical Stream Drops)
+[2026-10-24 00:39:59] [INFO] [run_pipeline]: [STAGE COMPLETE] Explainability stage finished in 0.34s
+[2026-10-28 13:09:39] [ERROR] [run_pipeline]: Prediction failed: 'BaseEnsemble' object has no attribute 'view_bundle'
+Traceback (most recent call last):
+  File "C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\run_pipeline.py", line 1126, in run_prediction_cli
+    res = pipeline.predict(
+        title=title or "",
+    ...<5 lines>...
+        verbose=not output_json,
+    )
+  File "C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\src\predict.py", line 223, in predict
+    p_uncal, dis_raw, base_probas = self.stacking_model.predict_proba(X_sparse)
+                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\src\stacking.py", line 160, in predict_proba
+    meta_features, probas_dict, disagreement = self.base_ensemble.predict_base_features(X)
+                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
+  File "C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\src\base_models.py", line 217, in predict_base_features
+    probas = self.predict_proba_dict(X)
+  File "C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\src\base_models.py", line 201, in predict_proba_dict
+    views = self._get_views(X)
+  File "C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\src\base_models.py", line 159, in _get_views
+    assert self.view_bundle is not None, "view_bundle not initialised"
+           ^^^^^^^^^^^^^^^^
+AttributeError: 'BaseEnsemble' object has no attribute 'view_bundle'
+[2026-10-28 13:13:34] [ERROR] [run_pipeline]: Prediction failed: view_bundle not initialised
+Traceback (most recent call last):
+  File "C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\run_pipeline.py", line 1126, in run_prediction_cli
+    res = pipeline.predict(
+        title=title or "",
+    ...<5 lines>...
+        verbose=not output_json,
+    )
+  File "C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\src\predict.py", line 244, in predict
+    p_uncal, dis_raw, base_probas = self.stacking_model.predict_proba(X_dense)
+                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\src\stacking.py", line 160, in predict_proba
+    meta_features, probas_dict, disagreement = self.base_ensemble.predict_base_features(X)
+                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
+  File "C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\src\base_models.py", line 228, in predict_base_features
+    probas = self.predict_proba_dict(X)
+  File "C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\src\base_models.py", line 212, in predict_proba_dict
+    views = self._get_views(X)
+  File "C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\src\base_models.py", line 170, in _get_views
+    assert self.view_bundle is not None, "view_bundle not initialised"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: view_bundle not initialised
+[2026-10-28 13:15:02] [ERROR] [run_pipeline]: Prediction failed: only 0-dimensional arrays can be converted to Python scalars
+Traceback (most recent call last):
+  File "C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\run_pipeline.py", line 1126, in run_prediction_cli
+    res = pipeline.predict(
+        title=title or "",
+    ...<5 lines>...
+        verbose=not output_json,
+    )
+  File "C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\src\predict.py", line 279, in predict
+    "p_lexical":  float(base_probas.get("lr",   p_cal_val)),
+                  ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: only 0-dimensional arrays can be converted to Python scalars
+[2026-10-28 13:20:58] [ERROR] [run_pipeline]: Prediction failed: 'disagreement'
+Traceback (most recent call last):
+  File "C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\run_pipeline.py", line 1126, in run_prediction_cli
+    res = pipeline.predict(
+        title=title or "",
+    ...<5 lines>...
+        verbose=not output_json,
+    )
+  File "C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\src\predict.py", line 343, in predict
+    why_explanation = synthesize_why_prediction(
+        gate_result=gate_res,
+    ...<2 lines>...
+        local_features=local_features,
+    )
+  File "C:\Users\SUPRATIM\Desktop\MY DOCS\VIT\NLP\Project\CAGE-FAKE\src\unique_features.py", line 505, in synthesize_why_prediction
+    disagreement = gate_result["disagreement"]
+                   ~~~~~~~~~~~^^^^^^^^^^^^^^^^
+KeyError: 'disagreement'

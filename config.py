@@ -96,8 +96,15 @@ CALIBRATION_BINS = 10
 # Uncertainty Gating Threshold Sweeps
 TAU_SWEEP = [0.60, 0.65, 0.70, 0.75, 0.80]
 DELTA_SWEEP = [0.10, 0.15, 0.20, 0.25]
-DEFAULT_TAU = 0.70
+DEFAULT_TAU = 0.65  # Default calibrated confidence threshold (configurable, default 0.65)
 DEFAULT_DELTA = 0.15
+
+# Evidence-Grounded Triage Configuration
+DEFAULT_CONFIDENCE_THRESHOLD = 0.65  # Configurable calibrated confidence threshold
+EVIDENCE_SIMILARITY_THRESHOLD = 0.58  # SBERT cosine similarity for claim-evidence support
+EVIDENCE_CONTRADICTION_THRESHOLD = 0.55  # SBERT cosine similarity for contradiction detection
+HEADLINE_BODY_MISMATCH_THRESHOLD = 0.40  # SBERT similarity below which headline-body mismatch is flagged
+KNOWLEDGE_BASE_DIR = DATA_DIR / "knowledge_base"
 
 # Research Benchmark Target Metrics
 TARGET_METRICS = {

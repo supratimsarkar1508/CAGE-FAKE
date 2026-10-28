@@ -1,29 +1,41 @@
 """
-CAGE-Fake: Stacking Meta-Learner Module
-Generates strictly leakage-free Out-Of-Fold (OOF) predictions via K-Fold CV on TRAIN split,
-and trains a Logistic Regression meta-learner on [p_lgbm, p_rf, p_xgb, disagreement].
+CAGE-Fake: Stacking Meta-Learner Module (Heterogeneous View Edition)
+=====================================================================
+Generates strictly leakage-free Out-Of-Fold (OOF) predictions via K-Fold CV on TRAIN split.
+Each base model operates on its own orthogonal feature view (see base_models.py).
+Meta-learner is a Logistic Regression trained on [p_lr, p_lgbm, p_rf, p_xgb, disagreement].
+
+KEY CHANGE from the original:
+  - fit() now receives the RAW SPARSE matrix from UnifiedFeaturePipeline (not the SVD-
+    compressed dense matrix from ManifoldBalancingPipeline).
+  - stream_boundaries (dict mapping stream name → (start, end) column indices) must be
+    passed in so HeterogeneousViewBundle can slice each model's view correctly.
+  - ManifoldBalancingPipeline is NO LONGER used as a pre-processing step before base models;
+    the SVD is now computed INSIDE HeterogeneousViewBundle only for the LightGBM view.
 """
 
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional
 import numpy as np
 from sklearn.model_selection import StratifiedKFold
 from sklearn.linear_model import LogisticRegression
-from lightgbm import LGBMClassifier
-from sklearn.ensemble import RandomForestClassifier
-from xgboost import XGBClassifier
 
-from config import N_FOLDS_STACKING, RANDOM_SEED, LGBM_PARAMS, RF_PARAMS, XGB_PARAMS
+from config import N_FOLDS_STACKING, RANDOM_SEED
 from src.base_models import BaseEnsemble
 from src.utils import setup_logger
 
 logger = setup_logger("stacking")
 
+
 class StackingClassifier:
     """
-    Leakage-free Stacking Classifier:
+    Leakage-free Stacking Classifier with heterogeneous base views:
     1. Fits base learners across K-folds on TRAIN to produce OOF probability matrix.
-    2. Fits LogisticRegression meta-learner on OOF [p_lgbm, p_rf, p_xgb, disagreement].
-    3. Re-fits base learners on entire TRAIN split for downstream inference.
+       Each base learner uses its own orthogonal feature view.
+    2. Fits LogisticRegression meta-learner on OOF [p_lr, p_lgbm, p_rf, p_xgb, disagreement].
+    3. Re-fits base learners on entire TRAIN split for deployment.
+
+    IMPORTANT: X_train must be the RAW SPARSE matrix from UnifiedFeaturePipeline.
+               Do NOT pass SVD-compressed dense features here.
     """
 
     def __init__(self, n_folds: int = N_FOLDS_STACKING, random_state: int = RANDOM_SEED):
@@ -32,100 +44,115 @@ class StackingClassifier:
         self.meta_learner = LogisticRegression(random_state=self.random_state, max_iter=1000)
         self.base_ensemble = BaseEnsemble()
         self.is_fitted = False
+        self._stream_boundaries: Optional[Dict] = None
 
-    def fit(self, X_train, y_train, use_smote: bool = False) -> "StackingClassifier":
+    def fit(
+        self,
+        X_train,
+        y_train,
+        stream_boundaries: Optional[Dict] = None,
+        use_smote: bool = False,
+    ) -> "StackingClassifier":
         """
-        Executes strict leakage-free K-fold cross-validation on TRAIN split to generate OOF meta-features,
-        fits the meta-learner on OOF predictions, and fits the final base ensemble on full TRAIN.
+        Executes strict leakage-free K-fold cross-validation on TRAIN split.
 
-        Guarantees:
-        1. Folds are partitioned from original real training examples.
-        2. If SMOTE is enabled, it is applied strictly to the training portion of each fold.
-        3. Held-out validation examples are never resampled, augmented, or seen during fold training.
-        4. Exactly one valid OOF prediction is generated for every real training example.
-        5. The meta-learner is trained on real labels without synthetic contamination.
-        6. Calibration and test data are completely excluded from this procedure.
+        Args:
+            X_train:            Raw sparse feature matrix (N, D) from UnifiedFeaturePipeline.
+            y_train:            Binary label array (N,).
+            stream_boundaries:  Dict mapping stream name → (start_col, end_col).
+                                Must be provided so each model gets the right slice.
+            use_smote:          If True, apply SMOTE inside each fold (on SVD-compressed LR
+                                view only; other views are already dense and manageable).
         """
-        logger.info(f"Generating Out-of-Fold (OOF) predictions with {self.n_folds}-fold Stratified CV on TRAIN (use_smote={use_smote})...")
+        if stream_boundaries is not None:
+            self._stream_boundaries = stream_boundaries
+        else:
+            self._stream_boundaries = {}
+
+        logger.info(
+            f"Generating OOF predictions with {self.n_folds}-fold Stratified CV on TRAIN "
+            f"(shape: {X_train.shape}, use_smote={use_smote}, "
+            f"streams: {list(self._stream_boundaries.keys())})..."
+        )
+
         skf = StratifiedKFold(n_splits=self.n_folds, shuffle=True, random_state=self.random_state)
-
         n_samples = X_train.shape[0]
-        oof_p_rf = np.zeros(n_samples, dtype=np.float32)
-        oof_p_xgb = np.zeros(n_samples, dtype=np.float32)
+
+        oof_p_lr   = np.zeros(n_samples, dtype=np.float32)
         oof_p_lgbm = np.zeros(n_samples, dtype=np.float32)
-        oof_p_lr = np.zeros(n_samples, dtype=np.float32)
+        oof_p_rf   = np.zeros(n_samples, dtype=np.float32)
+        oof_p_xgb  = np.zeros(n_samples, dtype=np.float32)
 
         visited_indices = set()
 
         for fold, (train_idx, val_idx) in enumerate(skf.split(X_train, y_train)):
-            logger.info(f"  Training fold {fold + 1}/{self.n_folds} (train: {len(train_idx)}, val: {len(val_idx)})...")
-            X_tr, y_tr = X_train[train_idx], y_train[train_idx]
+            logger.info(
+                f"  Fold {fold + 1}/{self.n_folds}: "
+                f"train={len(train_idx)}, val={len(val_idx)}"
+            )
+            X_tr = X_train[train_idx]
             X_va = X_train[val_idx]
+            y_tr = y_train[train_idx]
 
-            # Track visited validation indices to verify completeness
-            visited_indices.update(val_idx)
+            visited_indices.update(val_idx.tolist())
 
-            # Apply SMOTE strictly to fold training data if enabled
-            if use_smote:
-                from imblearn.over_sampling import SMOTE
-                sm = SMOTE(random_state=self.random_state + fold)
-                X_tr_fit, y_tr_fit = sm.fit_resample(X_tr, y_tr)
-            else:
-                X_tr_fit, y_tr_fit = X_tr, y_tr
+            # Build a fold-specific BaseEnsemble (fits its own SVD for the LightGBM view)
+            fold_ensemble = BaseEnsemble(
+                stream_boundaries=self._stream_boundaries,
+                svd_components=100,
+            )
+            fold_ensemble.fit(X_tr, y_tr)
 
-            fold_rf = RandomForestClassifier(**RF_PARAMS)
-            fold_xgb = XGBClassifier(**XGB_PARAMS)
-            fold_lgbm = LGBMClassifier(**LGBM_PARAMS)
-            fold_lr = LogisticRegression(max_iter=1000, random_state=self.random_state, C=1.0)
+            fold_probas = fold_ensemble.predict_proba_dict(X_va)
+            oof_p_lr[val_idx]   = fold_probas["lr"]
+            oof_p_lgbm[val_idx] = fold_probas["lgbm"]
+            oof_p_rf[val_idx]   = fold_probas["rf"]
+            oof_p_xgb[val_idx]  = fold_probas["xgb"]
 
-            fold_rf.fit(X_tr_fit, y_tr_fit)
-            fold_xgb.fit(X_tr_fit, y_tr_fit)
-            fold_lgbm.fit(X_tr_fit, y_tr_fit)
-            fold_lr.fit(X_tr_fit, y_tr_fit)
+        # Completeness check
+        assert len(visited_indices) == n_samples, (
+            f"OOF indices incomplete: visited {len(visited_indices)} of {n_samples}"
+        )
 
-            # Predict on strictly untouched, real held-out validation samples
-            oof_p_rf[val_idx] = fold_rf.predict_proba(X_va)[:, 1]
-            oof_p_xgb[val_idx] = fold_xgb.predict_proba(X_va)[:, 1]
-            oof_p_lgbm[val_idx] = fold_lgbm.predict_proba(X_va)[:, 1]
-            oof_p_lr[val_idx] = fold_lr.predict_proba(X_va)[:, 1]
-
-        # Completeness verification
-        assert len(visited_indices) == n_samples, f"OOF indices incomplete: visited {len(visited_indices)} of {n_samples}"
-
-        # Calculate OOF disagreement = std(p_rf, p_xgb, p_lgbm, p_lr)
-        oof_matrix = np.column_stack([oof_p_rf, oof_p_xgb, oof_p_lgbm, oof_p_lr])
+        # Genuine disagreement: std across orthogonal model outputs
+        oof_matrix = np.column_stack([oof_p_lr, oof_p_lgbm, oof_p_rf, oof_p_xgb])
         oof_disagreement = np.std(oof_matrix, axis=1, ddof=0).astype(np.float32)
 
-        # Meta-features: [p_rf, p_xgb, p_lgbm, p_lr, disagreement]
-        oof_meta_features = np.column_stack([oof_p_rf, oof_p_xgb, oof_p_lgbm, oof_p_lr, oof_disagreement])
+        # Meta-features: [p_lr, p_lgbm, p_rf, p_xgb, disagreement]
+        oof_meta_features = np.column_stack(
+            [oof_p_lr, oof_p_lgbm, oof_p_rf, oof_p_xgb, oof_disagreement]
+        )
         self.oof_meta_features = oof_meta_features
 
-        logger.info(f"Fitting Logistic Regression meta-learner on {len(oof_meta_features)} real OOF features...")
+        logger.info(
+            f"Fitting LR meta-learner on {len(oof_meta_features)} real OOF examples "
+            f"(OOF disagreement mean={oof_disagreement.mean():.4f}, "
+            f"std={oof_disagreement.std():.4f})..."
+        )
         self.meta_learner.fit(oof_meta_features, y_train)
 
-        # Train final base models on all of permitted TRAIN split for deployment
-        logger.info("Fitting deployment base learners on full TRAIN split...")
-        if use_smote:
-            from imblearn.over_sampling import SMOTE
-            sm_final = SMOTE(random_state=self.random_state)
-            X_train_final, y_train_final = sm_final.fit_resample(X_train, y_train)
-            self.base_ensemble.fit(X_train_final, y_train_final)
-        else:
-            self.base_ensemble.fit(X_train, y_train)
+        # Final deployment base ensemble (retrained on full TRAIN)
+        logger.info("Fitting deployment base ensemble on full TRAIN split...")
+        self.base_ensemble = BaseEnsemble(
+            stream_boundaries=self._stream_boundaries,
+            svd_components=100,
+        )
+        self.base_ensemble.fit(X_train, y_train)
 
         self.is_fitted = True
-        logger.info("Stacking Classifier fitted successfully with zero OOF leakage.")
+        logger.info("StackingClassifier fitted successfully with orthogonal views & zero OOF leakage.")
         return self
 
     def predict_proba(self, X) -> Tuple[np.ndarray, np.ndarray, Dict[str, np.ndarray]]:
         """
-        Inference:
-        1. Predicts base probabilities and disagreement
-        2. Predicts meta-learner probability p_stack = P(FAKE)
+        Inference using heterogeneous views:
+        1. Each base model predicts from its own orthogonal feature view.
+        2. Meta-learner combines [p_lr, p_lgbm, p_rf, p_xgb, disagreement].
+
         Returns:
-            p_stack: np.ndarray (N,) -> P(FAKE)
-            disagreement: np.ndarray (N,) -> std across base learners
-            probas_dict: dict with individual model probabilities
+            p_stack:      shape (N,)  — stacked P(FAKE) from meta-learner
+            disagreement: shape (N,)  — genuine inter-view std
+            probas_dict:  per-model P(FAKE) dictionaries
         """
         if not self.is_fitted:
             raise RuntimeError("StackingClassifier must be fitted before predicting.")

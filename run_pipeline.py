@@ -158,37 +158,49 @@ def stage_features(prep_dict: Dict[str, Any], force: bool = False):
 
 
 def stage_balance(feat_dict: Dict[str, Any], force: bool = False):
+    """
+    STAGE 4 (v2 — Heterogeneous View Edition):
+    The global TruncatedSVD compression step has been REMOVED as the bottleneck for model input.
+    Each base model now receives a different orthogonal slice of the raw feature matrix
+    (see base_models.HeterogeneousViewBundle). The ManifoldBalancingPipeline object is still
+    saved for backward compatibility with predict.py (which loads it at inference) but its
+    transform() output is NO LONGER fed to the stacking/base models.
+
+    The "dense" keys in the result dict now point to the raw sparse matrices, so downstream
+    stage functions that refer to X_*_dense still work without modification.
+    """
     stage_file = CACHE_DIR / "stage_balance.joblib"
     if stage_file.exists() and not force:
-        logger.info("[RESUME] Loading balanced representations from stage_balance.joblib...")
+        logger.info("[RESUME] Loading balance stage from stage_balance.joblib...")
         return load_artifact(stage_file)
 
     t0 = time.time()
-    logger.info(">>> STAGE 4: Dimensionality Reduction (TruncatedSVD fitted on TRAIN)")
+    logger.info(">>> STAGE 4: Feature Bundle (Sparse matrices forwarded; SVD now per-model inside BaseEnsemble)")
+
+    # Fit a legacy ManifoldBalancingPipeline on TRAIN for backward-compatibility
+    # (predict.py loads it; we still save it so old artifact loads don't fail)
     balancer = ManifoldBalancingPipeline()
     balancer.fit(feat_dict["X_train"])
+    save_artifact(balancer, TRAINED_MODELS_DIR / "balancer.joblib")
 
-    X_train_dense = balancer.transform(feat_dict["X_train"])
-    X_val_dense = balancer.transform(feat_dict["X_val"])
-    X_calib_dense = balancer.transform(feat_dict["X_calib"])
-    X_test_dense = balancer.transform(feat_dict["X_test"])
-
+    # The "dense" keys are intentionally aliases to the raw sparse matrices.
+    # Base models slice their own orthogonal views internally.
     res = {
         "balancer": balancer,
-        "X_train_dense": X_train_dense,
-        "X_train_bal": X_train_dense,
-        "y_train_bal": feat_dict["y_train"],
-        "y_train": feat_dict["y_train"],
-        "X_val_dense": X_val_dense,
-        "X_calib_dense": X_calib_dense,
-        "X_test_dense": X_test_dense,
-        "y_val": feat_dict["y_val"],
-        "y_calib": feat_dict["y_calib"],
-        "y_test": feat_dict["y_test"],
+        "X_train_dense": feat_dict["X_train"],   # sparse — models slice internally
+        "X_train_bal":   feat_dict["X_train"],   # alias
+        "y_train_bal":   feat_dict["y_train"],
+        "y_train":       feat_dict["y_train"],
+        "X_val_dense":   feat_dict["X_val"],
+        "X_calib_dense": feat_dict["X_calib"],
+        "X_test_dense":  feat_dict["X_test"],
+        "y_val":         feat_dict["y_val"],
+        "y_calib":       feat_dict["y_calib"],
+        "y_test":        feat_dict["y_test"],
+        "stream_boundaries": feat_dict["pipeline"].stream_boundaries,
     }
-    save_artifact(balancer, TRAINED_MODELS_DIR / "balancer.joblib")
     save_artifact(res, stage_file)
-    logger.info(f"[STAGE COMPLETE] SVD transformation finished in {time.time() - t0:.2f}s")
+    logger.info(f"[STAGE COMPLETE] Feature bundle stage finished in {time.time() - t0:.2f}s")
     return res
 
 
@@ -199,9 +211,11 @@ def stage_base_models(bal_dict: Dict[str, Any], force: bool = False):
         return load_artifact(stage_file)
 
     t0 = time.time()
-    logger.info(">>> STAGE 5: Training Heterogeneous Base Learners (Random Forest, XGBoost, LightGBM, Logistic Regression)")
-    base_ensemble = BaseEnsemble()
-    base_ensemble.fit(bal_dict["X_train_dense"], bal_dict["y_train"])
+    logger.info(">>> STAGE 5: Training Heterogeneous Base Learners (4 orthogonal views: LR→TF-IDF, LGBM→SVD, RF→Stylo, XGB→SBERT)")
+    stream_boundaries = bal_dict.get("stream_boundaries", {})
+    base_ensemble = BaseEnsemble(stream_boundaries=stream_boundaries)
+    base_ensemble.fit(bal_dict["X_train_dense"], bal_dict["y_train"],
+                      stream_boundaries=stream_boundaries)
 
     save_artifact(base_ensemble, TRAINED_MODELS_DIR / "base_ensemble.joblib")
     res = {
@@ -209,7 +223,7 @@ def stage_base_models(bal_dict: Dict[str, Any], force: bool = False):
         "train_time": time.time() - t0,
     }
     save_artifact(res, stage_file)
-    logger.info(f"[STAGE COMPLETE] Base learners trained in {time.time() - t0:.2f}s")
+    logger.info(f"[STAGE COMPLETE] Heterogeneous base learners trained in {time.time() - t0:.2f}s")
     return res
 
 
@@ -220,9 +234,15 @@ def stage_stacking(bal_dict: Dict[str, Any], force: bool = False):
         return load_artifact(stage_file)
 
     t0 = time.time()
-    logger.info(">>> STAGE 6: Leakage-Free OOF Stacking Meta-Learner (4 Base Models + Disagreement)")
+    logger.info(">>> STAGE 6: Leakage-Free OOF Stacking (4 orthogonal views, genuine disagreement signal)")
+    stream_boundaries = bal_dict.get("stream_boundaries", {})
     stacking_model = StackingClassifier()
-    stacking_model.fit(bal_dict["X_train_dense"], bal_dict["y_train"], use_smote=False)
+    stacking_model.fit(
+        bal_dict["X_train_dense"],
+        bal_dict["y_train"],
+        stream_boundaries=stream_boundaries,
+        use_smote=False,
+    )
 
     save_artifact(stacking_model, TRAINED_MODELS_DIR / "stacking_model.joblib")
     res = {
@@ -326,16 +346,24 @@ def stage_explain(feat_dict: Dict[str, Any], bal_dict: Dict[str, Any], stack_dic
         return load_artifact(stage_file)
 
     t0 = time.time()
-    logger.info(">>> STAGE 10: Explainability (Meta-Model Attribution & Empirical Stream Drops)")
-    pipeline = feat_dict["pipeline"]
+    logger.info(">>> STAGE 10: Explainability (Meta-Model SHAP Attribution on orthogonal view outputs)")
     stacking_model = stack_dict["stacking_model"]
 
+    # Meta-learner input: [p_lr, p_lgbm, p_rf, p_xgb, disagreement]
+    # These correspond to the four orthogonal expert views + their inter-view std
     explainer = SHAPExplainer(
         model=stacking_model.meta_learner,
-        feature_names=["Random Forest [P(FAKE)]", "XGBoost [P(FAKE)]", "LightGBM [P(FAKE)]", "Logistic Regression [P(FAKE)]", "Base Disagreement (std)"],
+        feature_names=[
+            "LR [TF-IDF Lexical]",
+            "LightGBM [SVD Topics]",
+            "RF [Stylometrics]",
+            "XGB [SBERT Semantic]",
+            "Inter-View Disagreement (std)",
+        ],
         stream_boundaries={"meta": (0, 5)}
     )
 
+    # Use a sample of sparse train matrix (the predict_base_features handles slicing internally)
     X_train_bg = bal_dict["X_train_dense"][:100]
     meta_bg, _, _ = stacking_model.base_ensemble.predict_base_features(X_train_bg)
     explainer.fit(meta_bg)
@@ -589,22 +617,32 @@ def stage_ablation(feat_dict: Dict[str, Any], bal_dict: Dict[str, Any], stack_di
             X_cal_abl = X_calib_raw[:, keep_indices]
             X_te_abl = X_test_raw[:, keep_indices]
 
-            svd_abl = TruncatedSVD(n_components=min(100, abl_dims - 1), random_state=RANDOM_SEED)
-            X_tr_dense = svd_abl.fit_transform(X_tr_abl).astype(np.float32)
-            X_cal_dense = svd_abl.transform(X_cal_abl).astype(np.float32)
-            X_te_dense = svd_abl.transform(X_te_abl).astype(np.float32)
+            # Recompute stream boundaries for the ablated matrix
+            # (columns shift after dropping the removed stream's range)
+            abl_boundaries = {}
+            shift = 0
+            for sname, (s, e) in sorted(stream_boundaries.items(), key=lambda x: x[1][0]):
+                if sname == stream_to_drop:
+                    shift = e - s  # this stream is dropped; accumulate shift
+                    continue
+                new_s = s - shift
+                new_e = e - shift
+                # Adjust for any previously dropped earlier streams
+                abl_boundaries[sname] = (new_s, new_e)
 
-            # Train StackingClassifier on ablated features
+            # Train StackingClassifier directly on ablated sparse matrix + recomputed boundaries
             stacker_abl = StackingClassifier(n_folds=3, random_state=RANDOM_SEED)
-            stacker_abl.fit(X_tr_dense, y_train, use_smote=False)
+            stacker_abl.fit(X_tr_abl, y_train,
+                            stream_boundaries=abl_boundaries,
+                            use_smote=False)
 
             # Calibrate on ablated calibration split
-            p_cal_uncal, _, _ = stacker_abl.predict_proba(X_cal_dense)
+            p_cal_uncal, _, _ = stacker_abl.predict_proba(X_cal_abl)
             calibrator_abl = ModelCalibrator(method="sigmoid")
             calibrator_abl.fit(p_cal_uncal, y_calib)
 
             # Evaluate on untouched ablated test split
-            p_te_uncal, _, _ = stacker_abl.predict_proba(X_te_dense)
+            p_te_uncal, _, _ = stacker_abl.predict_proba(X_te_abl)
             p_te_cal = calibrator_abl.calibrate(p_te_uncal)
             preds_abl = (p_te_cal >= 0.5).astype(int)
 
@@ -1027,9 +1065,25 @@ def run_evaluation_pipeline(skip_transformer: bool = True, force: bool = False):
     print("\n")
 
 
-def run_prediction_cli(url: Optional[str] = None, text: Optional[str] = None, title: Optional[str] = None, save_pdf: bool = True):
+def run_prediction_cli(
+    url: Optional[str] = None,
+    text: Optional[str] = None,
+    title: Optional[str] = None,
+    sources: Optional[List[str]] = None,
+    save_pdf: bool = True,
+    output_json: bool = False,
+    confidence_threshold: Optional[float] = None,
+):
     """Executes prediction mode from CLI or interactive terminal prompt."""
+    if output_json:
+        import logging
+        logging.disable(logging.WARNING)
+        for name in ["predict", "semantic_features", "evidence_analysis", "nlp_explanation", "run_pipeline"]:
+            logging.getLogger(name).setLevel(logging.ERROR)
+
     pipeline = PredictionPipeline().load_artifacts()
+    if confidence_threshold is not None:
+        pipeline.gate.tau = float(confidence_threshold)
 
     # Interactive prompt if neither URL nor text provided
     if not url and not text:
@@ -1069,13 +1123,36 @@ def run_prediction_cli(url: Optional[str] = None, text: Optional[str] = None, ti
                 return
 
     try:
-        pipeline.predict(title=title or "", body=text or "", url=url, save_pdf=save_pdf, verbose=True)
+        res = pipeline.predict(
+            title=title or "",
+            body=text or "",
+            url=url,
+            retrieved_sources=sources,
+            confidence_threshold=confidence_threshold,
+            save_pdf=save_pdf and not output_json,
+            verbose=not output_json,
+        )
+        if output_json:
+            print(json.dumps(res["explainable_json"], indent=2))
     except ArticleExtractionError as e:
-        print(f"\n\033[91m[!] URL EXTRACTION ERROR: {e}\033[0m")
-        print("    Per trustworthy AI requirements, NO REAL or FAKE prediction is made for failed extractions.\n")
+        if output_json:
+            print(json.dumps({
+                "verdict": "UNCERTAIN",
+                "confidence": 0.0,
+                "per_claim_evidence_status": [],
+                "claim_verifications": [],
+                "linguistic_red_flags": [f"URL extraction error: {e}"],
+                "reasoning_summary": "Article content could not be extracted from URL. Aborted with UNCERTAIN per trustworthy AI requirements."
+            }, indent=2))
+        else:
+            print(f"\n\033[91m[!] URL EXTRACTION ERROR: {e}\033[0m")
+            print("    Per trustworthy AI requirements, NO REAL or FAKE prediction is made for failed extractions.\n")
     except Exception as e:
         logger.error(f"Prediction failed: {e}", exc_info=True)
-        print(f"\n\033[91m[!] ERROR: {e}\033[0m\n")
+        if output_json:
+            print(json.dumps({"error": str(e), "verdict": "UNCERTAIN"}, indent=2))
+        else:
+            print(f"\n\033[91m[!] ERROR: {e}\033[0m\n")
 
 
 def main():
@@ -1094,10 +1171,10 @@ Examples:
   python run_pipeline.py --predict
 
   # 4. Direct URL prediction:
-  python run_pipeline.py --predict --url https://www.bbc.com/news/world-us-canada-68000000
+  python run_pipeline.py --predict --url https://apnews.com/article/example-story
 
-  # 5. Direct text prediction:
-  python run_pipeline.py --predict --title "Breaking News" --text "Article content here..."
+  # 5. Direct text prediction with explainable JSON output:
+  python run_pipeline.py --predict --title "Breaking News" --text "Article content here..." --json
         """
     )
     parser.add_argument("--train", action="store_true", help="Train base models, stacking, calibrator, and save artifacts")
@@ -1106,7 +1183,10 @@ Examples:
     parser.add_argument("--url", type=str, default=None, help="Article URL for prediction")
     parser.add_argument("--text", type=str, default=None, help="Article text for prediction")
     parser.add_argument("--title", type=str, default=None, help="Article title for prediction")
+    parser.add_argument("--sources", nargs="*", default=None, help="Optional external retrieved evidence statements or sources")
     parser.add_argument("--no-pdf", action="store_true", help="Skip PDF report generation during prediction")
+    parser.add_argument("--json", action="store_true", help="Output explainable JSON result directly to stdout")
+    parser.add_argument("--confidence-threshold", type=float, default=0.65, help="Configurable minimum calibrated confidence threshold (default 0.65)")
     parser.add_argument("--sample", type=int, default=None, help="Subsample N rows for smoke testing")
     parser.add_argument("--with-transformer", action="store_true", help="Enable DeBERTa transformer fine-tuning baseline")
     parser.add_argument("--force", action="store_true", help="Force recomputation ignoring cache")
@@ -1131,7 +1211,15 @@ Examples:
         run_evaluation_pipeline(skip_transformer=skip_transformer, force=args.force)
 
     if args.predict:
-        run_prediction_cli(url=args.url, text=args.text, title=args.title, save_pdf=not args.no_pdf)
+        run_prediction_cli(
+            url=args.url,
+            text=args.text,
+            title=args.title,
+            sources=args.sources,
+            save_pdf=not args.no_pdf,
+            output_json=args.json,
+            confidence_threshold=args.confidence_threshold,
+        )
 
 
 if __name__ == "__main__":

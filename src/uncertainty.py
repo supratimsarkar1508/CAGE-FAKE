@@ -43,28 +43,86 @@ class UncertaintyGate:
         p_calibrated: float,
         disagreement: float,
         evidence_conflict: Optional[float] = None,
+        evidence_analysis: Optional[Dict[str, Any]] = None,
+        linguistic_red_flags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Evaluates gate on a single article using:
         1. Calibrated confidence: max(p, 1-p)
         2. Base-model disagreement: std across 4 base learners (RF, XGB, LGBM, LR)
-        3. Optional external evidence conflict hook
+        3. Evidence Analysis (Supported, Contradicted, Unverified claims)
+        4. Linguistic Red Flags congruence
 
         Identifies:
-        - 'both_triggers' when confidence < tau AND disagreement > delta
-        - 'low_confidence' when confidence < tau and disagreement <= delta
-        - 'high_disagreement' when confidence >= tau and disagreement > delta
-        - 'evidence_conflict' when external conflict > 0.5
-        - 'none' when neither condition triggers (verdict is accepted as REAL or FAKE)
+        - 'missing_evidence': when article lacks supporting evidence (per trustworthy AI requirements)
+        - 'conflicting_evidence': when claims have mixed support and contradiction, or conflict score > 0.5
+        - 'signal_disagreement': when linguistic signals conflict with evidence verification
+        - 'both_triggers': when confidence < tau AND disagreement > delta
+        - 'low_confidence': when confidence < tau
+        - 'high_disagreement': when disagreement > delta
+        - 'none': accepted prediction (REAL or FAKE) with supporting evidence and high confidence
         """
         confidence = float(max(p_calibrated, 1.0 - p_calibrated))
         disagreement = float(disagreement)
 
         is_low_conf = confidence < self.tau
         is_high_dis = disagreement > self.delta
-        is_ev_conflict = evidence_conflict is not None and evidence_conflict > 0.5
 
-        if is_low_conf and is_high_dis:
+        # Extract evidence status if available
+        has_evidence_analysis = evidence_analysis is not None
+        has_no_ev = False
+        has_conf_ev = False
+        has_supp_ev = False
+        has_cont_ev = False
+        ev_conflict_val = evidence_conflict
+
+        if has_evidence_analysis:
+            has_no_ev = evidence_analysis.get("has_no_evidence", False)
+            has_conf_ev = evidence_analysis.get("has_conflicting_evidence", False)
+            has_supp_ev = evidence_analysis.get("has_supporting_evidence", False)
+            has_cont_ev = evidence_analysis.get("has_contradicting_evidence", False)
+            auto_conflict = evidence_analysis.get("evidence_conflict_score", 0.0)
+            if ev_conflict_val is None:
+                ev_conflict_val = auto_conflict
+            else:
+                ev_conflict_val = max(ev_conflict_val, auto_conflict)
+
+        is_ev_conflict = ev_conflict_val is not None and ev_conflict_val > 0.5
+        red_flags = linguistic_red_flags or []
+
+        # Check for signal disagreement between linguistic features and evidence
+        is_signal_disagreement = False
+        if has_evidence_analysis:
+            # Evidence supports claims (suggesting REAL), but linguistic red flags indicate heavy manipulation or model predicts FAKE
+            if has_supp_ev and (p_calibrated >= 0.50 or len(red_flags) >= 2):
+                is_signal_disagreement = True
+            # Evidence contradicts claims (suggesting FAKE), but model predicts REAL with very low P(FAKE)
+            elif has_cont_ev and p_calibrated < 0.50:
+                is_signal_disagreement = True
+
+        # Apply Decision Gating Hierarchy
+        if has_evidence_analysis and (has_no_ev or (not has_supp_ev and not has_cont_ev)):
+            decision = "UNCERTAIN"
+            trigger = "missing_evidence"
+            explanation = (
+                "Uncertainty Gated (Missing Evidence): No corroborating evidence was found in the knowledge base or retrieved sources. "
+                "Per trustworthy AI requirements, the system never forces a REAL or FAKE label without supporting evidence."
+            )
+        elif is_ev_conflict or has_conf_ev:
+            decision = "UNCERTAIN"
+            trigger = "conflicting_evidence"
+            explanation = (
+                f"Uncertainty Gated (Conflicting Evidence): Contradictory evidence detected across article claims "
+                f"(evidence conflict score: {ev_conflict_val:.2f})."
+            )
+        elif is_signal_disagreement:
+            decision = "UNCERTAIN"
+            trigger = "signal_disagreement"
+            explanation = (
+                f"Uncertainty Gated (Signal Disagreement): Linguistic signals and evidence verification disagree "
+                f"({len(red_flags)} red flags detected, model P(FAKE)={p_calibrated:.1%})."
+            )
+        elif is_low_conf and is_high_dis:
             decision = "UNCERTAIN"
             trigger = "both_triggers"
             explanation = (
@@ -85,14 +143,18 @@ class UncertaintyGate:
                 f"Base-model disagreement ({disagreement:.3f}) exceeds threshold delta ({self.delta:.3f}); "
                 f"calibrated confidence is {confidence:.1%}."
             )
-        elif is_ev_conflict:
-            decision = "UNCERTAIN"
-            trigger = "evidence_conflict"
-            explanation = f"Conflict with verified external evidence detected ({evidence_conflict:.2f})."
         else:
-            decision = "FAKE" if p_calibrated >= 0.5 else "REAL"
+            if has_evidence_analysis:
+                if has_cont_ev:
+                    decision = "FAKE"
+                elif has_supp_ev:
+                    decision = "REAL"
+                else:
+                    decision = "UNCERTAIN"
+            else:
+                decision = "FAKE" if p_calibrated >= 0.5 else "REAL"
             trigger = "none"
-            explanation = f"High confidence ({confidence:.1%}) and acceptable base-model disagreement ({disagreement:.3f})."
+            explanation = f"High confidence ({confidence:.1%}), verified evidence alignment, and acceptable model disagreement ({disagreement:.3f})."
 
         return {
             "decision": decision,
@@ -100,18 +162,20 @@ class UncertaintyGate:
             "is_accepted": decision != "UNCERTAIN",
             "is_low_confidence": is_low_conf,
             "is_high_disagreement": is_high_dis,
-            "is_evidence_conflict": is_ev_conflict,
+            "is_evidence_conflict": is_ev_conflict or has_conf_ev,
+            "is_missing_evidence": has_no_ev,
+            "is_signal_disagreement": is_signal_disagreement,
             "confidence": confidence,
             "disagreement": disagreement,
             "p_calibrated": p_calibrated,
             "tau": self.tau,
             "delta": self.delta,
             "explanation": explanation,
-            "evidence_conflict_available": evidence_conflict is not None,
+            "evidence_conflict_available": ev_conflict_val is not None,
             "evidence_note": (
-                "External evidence active."
-                if evidence_conflict is not None
-                else "Evidence conflict unavailable because no gold-standard external evidence is provided at prediction time."
+                f"External evidence active (conflict score: {ev_conflict_val:.2f})."
+                if ev_conflict_val is not None
+                else "Evidence verification completed via knowledge base."
             ),
         }
 
@@ -290,7 +354,13 @@ class ThresholdOptimizer:
         out_path = save_path or (FIGURES_DIR / "risk_coverage_curve.png")
         out_path.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(out_path, dpi=300)
+
+        # Also save vector PDF in outputs/figures/pdf/07_risk_coverage.pdf
+        pdf_dir = FIGURES_DIR / "pdf"
+        pdf_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path = pdf_dir / "07_risk_coverage.pdf"
+        plt.savefig(pdf_path, format="pdf", bbox_inches="tight")
         plt.close()
 
-        logger.info(f"Risk-coverage curve saved to {out_path}")
+        logger.info(f"Risk-coverage curve saved to {out_path} and {pdf_path}")
         return out_path

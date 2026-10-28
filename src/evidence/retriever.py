@@ -1,0 +1,228 @@
+"""
+CAGE-Fake: Multi-Source Evidence Retriever with Disk Caching
+Queries live web search (DuckDuckGo via duckduckgo_search), Google Fact Check Tools API,
+and Wikipedia; scrapes authoritative article bodies using Trafilatura.
+"""
+
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+import json
+import hashlib
+import time
+import requests
+import trafilatura
+from duckduckgo_search import DDGS
+
+from src.utils import setup_logger
+from src.evidence.domain_whitelist import extract_domain, is_trusted_domain
+
+logger = setup_logger("retriever")
+
+CACHE_FILE = Path("outputs/cache/evidence_retrieval_cache.json")
+
+
+class EvidenceRetriever:
+    """
+    Retrieves candidate corroborating or debunking web pages for a factual claim.
+    Sources:
+    1. DuckDuckGo Web Search (live web news and reporting)
+    2. Google Fact Check Tools API (authoritative debunks and fact checks)
+    3. Wikipedia Search API (encyclopedic background)
+    All responses and scraped pages are cached on disk.
+    """
+
+    def __init__(self, cache_file: Path = CACHE_FILE, max_results_per_source: int = 4):
+        self.cache_file = Path(cache_file)
+        self.cache_file.parent.mkdir(parents=True, exist_ok=True)
+        self.max_results = max_results_per_source
+        self.cache: Dict[str, Any] = self._load_cache()
+
+    def _load_cache(self) -> Dict[str, Any]:
+        if self.cache_file.exists():
+            try:
+                with open(self.cache_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to load retrieval cache: {e}")
+        return {}
+
+    def _save_cache(self) -> None:
+        try:
+            with open(self.cache_file, "w", encoding="utf-8") as f:
+                json.dump(self.cache, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"Failed to save retrieval cache: {e}")
+
+    def _get_cache_key(self, query: str, source: str) -> str:
+        h = hashlib.sha256(f"{source}:{query.strip().lower()}".encode("utf-8")).hexdigest()
+        return h
+
+    def retrieve_for_claim(self, claim: str) -> List[Dict[str, Any]]:
+        """
+        Retrieves relevant pages/snippets from DuckDuckGo, FactCheck API, and Wikipedia.
+        Returns a list of dicts:
+        [{
+            'title': ...,
+            'url': ...,
+            'domain': ...,
+            'source_type': 'DuckDuckGo' | 'GoogleFactCheck' | 'Wikipedia',
+            'is_trusted': bool,
+            'content': ... (scraped full text or snippet)
+        }]
+        """
+        clean_query = claim.strip()
+        # Truncate overly long queries for search engines (keep first 15 words)
+        words = clean_query.split()
+        if len(words) > 16:
+            query_str = " ".join(words[:16])
+        else:
+            query_str = clean_query
+
+        results = []
+
+        # 1. DuckDuckGo Web Search
+        ddg_results = self._search_duckduckgo(query_str)
+        results.extend(ddg_results)
+
+        # 2. Google Fact Check Tools API
+        fc_results = self._search_google_fact_check(query_str)
+        results.extend(fc_results)
+
+        # 3. Wikipedia Search
+        wiki_results = self._search_wikipedia(query_str)
+        results.extend(wiki_results)
+
+        # Scrape and enrich with Trafilatura for top items that only have short snippets
+        enriched_results = []
+        for item in results:
+            url = item.get("url", "")
+            if url and len(item.get("content", "")) < 300:
+                scraped = self._scrape_url(url)
+                if scraped:
+                    item["content"] = scraped
+            enriched_results.append(item)
+
+        return enriched_results
+
+    def _search_duckduckgo(self, query: str) -> List[Dict[str, Any]]:
+        key = self._get_cache_key(query, "ddg")
+        if key in self.cache:
+            return self.cache[key]
+
+        items = []
+        try:
+            with DDGS() as ddgs:
+                ddg_gen = ddgs.text(query, max_results=self.max_results)
+                for r in ddg_gen:
+                    url = r.get("href", "")
+                    domain = extract_domain(url)
+                    items.append({
+                        "title": r.get("title", ""),
+                        "url": url,
+                        "domain": domain,
+                        "source_type": "DuckDuckGo Web Search",
+                        "is_trusted": is_trusted_domain(domain),
+                        "content": r.get("body", ""),
+                    })
+        except Exception as e:
+            logger.debug(f"DuckDuckGo search error for query '{query}': {e}")
+
+        self.cache[key] = items
+        self._save_cache()
+        return items
+
+    def _search_google_fact_check(self, query: str) -> List[Dict[str, Any]]:
+        key = self._get_cache_key(query, "google_factcheck")
+        if key in self.cache:
+            return self.cache[key]
+
+        items = []
+        try:
+            # Public endpoint for Google Fact Check Tools API
+            api_url = "https://factchecktools.googleapis.com/v1alpha1/claims:search"
+            resp = requests.get(api_url, params={"query": query, "languageCode": "en"}, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                for c in data.get("claims", [])[:self.max_results]:
+                    for review in c.get("claimReview", []):
+                        url = review.get("url", "")
+                        domain = extract_domain(url)
+                        pub = review.get("publisher", {}).get("name", "Fact Checker")
+                        rating = review.get("textualRating", "Unrated")
+                        title = c.get("text", "")
+                        summary = f"Claim: {title}. Rating: {rating}. Review by {pub}."
+                        items.append({
+                            "title": title,
+                            "url": url,
+                            "domain": domain,
+                            "source_type": "Google Fact Check Tools",
+                            "is_trusted": True,  # Fact check publishers in Google index are verified IFCN
+                            "content": summary,
+                            "factcheck_rating": rating,
+                        })
+        except Exception as e:
+            logger.debug(f"Google FactCheck API search error: {e}")
+
+        self.cache[key] = items
+        self._save_cache()
+        return items
+
+    def _search_wikipedia(self, query: str) -> List[Dict[str, Any]]:
+        key = self._get_cache_key(query, "wikipedia")
+        if key in self.cache:
+            return self.cache[key]
+
+        items = []
+        try:
+            # Query Wikipedia API search
+            endpoint = "https://en.wikipedia.org/w/api.php"
+            params = {
+                "action": "query",
+                "list": "search",
+                "srsearch": query,
+                "format": "json",
+                "srlimit": 2,
+            }
+            resp = requests.get(endpoint, params=params, headers={"User-Agent": "CAGE-Fake/2.0"}, timeout=4)
+            if resp.status_code == 200:
+                data = resp.json()
+                for s in data.get("query", {}).get("search", []):
+                    title = s.get("title", "")
+                    page_id = s.get("pageid")
+                    clean_snippet = re_sub = s.get("snippet", "").replace('<span class="searchmatch">', "").replace('</span>', "")
+                    url = f"https://en.wikipedia.org/?curid={page_id}"
+                    items.append({
+                        "title": f"Wikipedia: {title}",
+                        "url": url,
+                        "domain": "en.wikipedia.org",
+                        "source_type": "Wikipedia Reference",
+                        "is_trusted": True,
+                        "content": clean_snippet,
+                    })
+        except Exception as e:
+            logger.debug(f"Wikipedia search error: {e}")
+
+        self.cache[key] = items
+        self._save_cache()
+        return items
+
+    def _scrape_url(self, url: str) -> str:
+        key = self._get_cache_key(url, "scrape")
+        if key in self.cache:
+            return self.cache[key]
+
+        try:
+            downloaded = trafilatura.fetch_url(url)
+            if downloaded:
+                text = trafilatura.extract(downloaded, include_comments=False)
+                if text and len(text.strip()) > 100:
+                    clean = text[:4000]  # Cap to first 4k chars
+                    self.cache[key] = clean
+                    self._save_cache()
+                    return clean
+        except Exception as e:
+            logger.debug(f"Failed to scrape {url}: {e}")
+
+        self.cache[key] = ""
+        self._save_cache()
+        return ""

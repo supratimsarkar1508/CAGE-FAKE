@@ -73,16 +73,58 @@ def compute_ece(
 
     return float(ece), bin_details
 
+class TemperatureScaling:
+    """
+    Temperature Scaling: Single scalar parameter T > 0 that rescales logits:
+    p_cal = sigmoid(logit / T)
+    T is optimized by minimizing cross-entropy (NLL) on the calibration partition.
+    """
+
+    def __init__(self):
+        self.temperature = 1.0
+        self.is_fitted = False
+
+    def fit(self, p_uncalibrated: np.ndarray, y_calib: np.ndarray) -> "TemperatureScaling":
+        from scipy.optimize import minimize_scalar
+        y = np.asarray(y_calib, dtype=float)
+        p = np.clip(np.asarray(p_uncalibrated, dtype=float), 1e-6, 1.0 - 1e-6)
+        logits = np.log(p / (1.0 - p))
+
+        def nll(temp):
+            if temp <= 0:
+                return 1e9
+            scaled_logits = logits / temp
+            prob = 1.0 / (1.0 + np.exp(-scaled_logits))
+            prob = np.clip(prob, 1e-7, 1.0 - 1e-7)
+            return -np.mean(y * np.log(prob) + (1.0 - y) * np.log(1.0 - prob))
+
+        res = minimize_scalar(nll, bounds=(0.05, 10.0), method="bounded")
+        self.temperature = float(res.x)
+        self.is_fitted = True
+        logger.info(f"Temperature scaling fitted: optimal temperature T = {self.temperature:.4f}")
+        return self
+
+    def calibrate(self, p_uncalibrated: np.ndarray) -> np.ndarray:
+        if not self.is_fitted:
+            raise RuntimeError("TemperatureScaling must be fitted before calling calibrate.")
+        p = np.clip(np.asarray(p_uncalibrated, dtype=float), 1e-6, 1.0 - 1e-6)
+        logits = np.log(p / (1.0 - p))
+        scaled_logits = logits / self.temperature
+        p_cal = 1.0 / (1.0 + np.exp(-scaled_logits))
+        return np.clip(p_cal.astype(np.float32), 0.0, 1.0)
+
+
 class ModelCalibrator:
     """
     Post-hoc calibrator fitted exclusively on the CALIBRATION partition.
     Primary method: Platt Scaling (logistic regression on logit/probability).
-    Secondary comparison: Isotonic Regression.
+    Secondary comparison: Temperature Scaling & Isotonic Regression.
     """
 
     def __init__(self, method: str = "sigmoid"):
         self.method = method
         self.platt_model = LogisticRegression(C=1.0, solver="lbfgs")
+        self.temperature_model = TemperatureScaling()
         self.isotonic_model = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
         self.is_fitted = False
 
@@ -99,7 +141,10 @@ class ModelCalibrator:
         log_odds = np.log(p_2d / (1.0 - p_2d))
         self.platt_model.fit(log_odds, y_calib)
 
-        # 2. Isotonic regression
+        # 2. Temperature scaling
+        self.temperature_model.fit(p_uncalibrated, y_calib)
+
+        # 3. Isotonic regression
         self.isotonic_model.fit(p_uncalibrated, y_calib)
 
         self.is_fitted = True
@@ -120,6 +165,8 @@ class ModelCalibrator:
         if m == "sigmoid":
             log_odds = np.log(p_clipped / (1.0 - p_clipped)).reshape(-1, 1)
             p_cal = self.platt_model.predict_proba(log_odds)[:, 1]
+        elif m in {"temperature", "temp"}:
+            p_cal = self.temperature_model.calibrate(p_clipped)
         elif m == "isotonic":
             p_cal = self.isotonic_model.predict(p_clipped)
         else:
@@ -179,7 +226,13 @@ class ModelCalibrator:
         out_path = save_path or (FIGURES_DIR / "reliability_diagram.png")
         out_path.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(out_path, dpi=300)
+
+        # Also save vector PDF in outputs/figures/pdf/06_reliability_comparison.pdf
+        pdf_dir = FIGURES_DIR / "pdf"
+        pdf_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path = pdf_dir / "06_reliability_comparison.pdf"
+        plt.savefig(pdf_path, format="pdf", bbox_inches="tight")
         plt.close()
 
-        logger.info(f"Reliability diagram saved to {out_path} (ECE Uncal: {ece_uncal:.4f} -> Cal: {ece_cal:.4f})")
+        logger.info(f"Reliability diagram saved to {out_path} and {pdf_path}")
         return out_path
