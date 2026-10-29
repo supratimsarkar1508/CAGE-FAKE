@@ -609,3 +609,70 @@ Traceback (most recent call last):
     disagreement = gate_result["disagreement"]
                    ~~~~~~~~~~~^^^^^^^^^^^^^^^^
 KeyError: 'disagreement'
+[2026-10-28 18:56:37] [INFO] [run_pipeline]: ==================================================
+[2026-10-28 18:56:37] [INFO] [run_pipeline]: CAGE-FAKE PIPELINE TRAINING STARTED
+[2026-10-28 18:56:37] [INFO] [run_pipeline]: Parameters: sample=None, skip_transformer=True, force=False
+[2026-10-28 18:56:37] [INFO] [run_pipeline]: ==================================================
+[2026-10-28 18:56:37] [INFO] [run_pipeline]: >>> STAGE 1: Data Loader & Stratified Partitioning
+[2026-10-28 18:56:40] [INFO] [run_pipeline]: [STAGE COMPLETE] Data loaded and partitioned in 2.24s
+[2026-10-28 18:56:40] [INFO] [run_pipeline]: >>> STAGE 2: Preprocessing (Raw + Clean Text & Linguistic Properties)
+[2026-10-28 18:57:00] [INFO] [run_pipeline]: [STAGE COMPLETE] Preprocessing finished in 20.54s
+[2026-10-28 18:57:00] [INFO] [run_pipeline]: >>> STAGE 3: Unified Feature Extraction (Streams A: Lexical, B: Semantic, C: Stylometric, D: Readability)
+[2026-10-28 18:58:33] [INFO] [run_pipeline]: Combined Feature Matrix Shape: (4265, 10408) (Total dimensions: 10408)
+[2026-10-28 18:58:35] [INFO] [run_pipeline]: [STAGE COMPLETE] Feature extraction finished in 95.16s
+[2026-10-28 18:58:35] [INFO] [run_pipeline]: >>> STAGE 4: Feature Bundle (Sparse matrices forwarded; SVD now per-model inside BaseEnsemble)
+[2026-10-28 18:58:46] [INFO] [run_pipeline]: [STAGE COMPLETE] Feature bundle stage finished in 10.44s
+[2026-10-28 18:58:46] [INFO] [run_pipeline]: >>> STAGE 5: Training Heterogeneous Base Learners (4 orthogonal views: LR→TF-IDF, LGBM→SVD, RF→Stylo, XGB→SBERT)
+[2026-10-28 19:00:05] [INFO] [run_pipeline]: [STAGE COMPLETE] Heterogeneous base learners trained in 78.94s
+[2026-10-28 19:00:05] [INFO] [run_pipeline]: >>> STAGE 6: Leakage-Free OOF Stacking (4 orthogonal views, genuine disagreement signal)
+[2026-10-28 19:06:32] [INFO] [run_pipeline]: [STAGE COMPLETE] Stacking meta-learner trained in 386.97s
+[2026-10-28 19:06:32] [INFO] [run_pipeline]: >>> STAGE 7: Isolated Post-Hoc Calibration (Platt Scaling per Model on Calibration Split)
+[2026-10-28 19:06:32] [INFO] [run_pipeline]: [STAGE COMPLETE] Calibration completed in 0.71s
+[2026-10-28 19:06:32] [INFO] [run_pipeline]: >>> STAGE 8 & 9: Uncertainty Gating & (tau, delta) Pareto Threshold Sweep on Validation
+[2026-10-28 19:06:33] [INFO] [run_pipeline]: Locked thresholds successfully saved to C:\Users\khyat\OneDrive\Desktop\cagefake_nlp\CAGE-FAKE\outputs\metrics\locked_thresholds.json: {'locked_tau': 0.8, 'locked_delta': 0.25, 'val_selective_acc': 0.9769230769230769, 'target_coverage': 0.8}
+[2026-10-28 19:06:35] [INFO] [run_pipeline]: [STAGE COMPLETE] Thresholds optimized in 2.61s
+[2026-10-28 19:06:35] [INFO] [run_pipeline]: >>> STAGE 10: Explainability (Meta-Model SHAP Attribution on orthogonal view outputs)
+[2026-10-28 19:06:38] [INFO] [run_pipeline]: [STAGE COMPLETE] Explainability stage finished in 3.04s
+[2026-10-28 19:08:50] [INFO] [run_pipeline]: ==================================================
+[2026-10-28 19:08:50] [INFO] [run_pipeline]: CAGE-FAKE BENCHMARK EVALUATION STARTED
+[2026-10-28 19:08:50] [INFO] [run_pipeline]: ==================================================
+[2026-10-28 19:08:50] [INFO] [run_pipeline]: [RESUME] Loading cached data splits from stage_data.joblib...
+[2026-10-28 19:08:50] [INFO] [run_pipeline]: [RESUME] Loading preprocessed representations from stage_preprocess.joblib...
+[2026-10-28 19:08:50] [INFO] [run_pipeline]: [RESUME] Loading extracted features from stage_features.joblib...
+[2026-10-28 19:08:51] [INFO] [run_pipeline]: [RESUME] Loading balance stage from stage_balance.joblib...
+[2026-10-28 19:08:52] [INFO] [run_pipeline]: [RESUME] Loading stacking meta-learner from stage_stacking.joblib...
+[2026-10-28 19:08:52] [INFO] [run_pipeline]: [RESUME] Loading calibration models from stage_calibration.joblib...
+[2026-10-28 19:08:52] [INFO] [run_pipeline]: [RESUME] Loading locked thresholds from cache...
+[2026-10-28 19:08:52] [INFO] [run_pipeline]: Skipping transformer fine-tuning baseline (CPU-safe default).
+[2026-10-28 19:08:52] [INFO] [run_pipeline]: >>> STAGE 12: Rigorous Evaluation on Unseen TEST Split across 5 Models (Calibrated & Uncalibrated)
+[2026-10-28 19:08:55] [INFO] [run_pipeline]: [STAGE COMPLETE] Test evaluation finished in 3.61s
+[2026-10-28 19:08:55] [INFO] [run_pipeline]: >>> STAGE 13: Systematic Ablation Studies (Feature Streams & Uncertainty Gates)
+[2026-10-28 19:08:55] [INFO] [run_pipeline]: --- Part 1: Feature Stream Ablations (Retraining models without streams) ---
+[2026-10-28 19:15:40] [INFO] [run_pipeline]:   Ablation: Without Lexical TF-IDF (Streams B+C+D) -> Dim: 403, Macro-F1: 0.9000 (Delta: -0.0409) in 404.8s
+[2026-10-28 19:18:37] [INFO] [run_pipeline]:   Ablation: Without Semantic SBERT (Streams A+C+D) -> Dim: 10024, Macro-F1: 0.9327 (Delta: -0.0082) in 176.5s
+[2026-10-28 19:21:33] [INFO] [run_pipeline]:   Ablation: Without Stylometric Features (Streams A+B+D) -> Dim: 10393, Macro-F1: 0.9426 (Delta: +0.0017) in 175.9s
+[2026-10-28 19:24:40] [INFO] [run_pipeline]:   Ablation: Without Readability Metrics (Streams A+B+C) -> Dim: 10404, Macro-F1: 0.9393 (Delta: -0.0016) in 187.1s
+[2026-10-28 19:24:40] [INFO] [run_pipeline]: Empirical Stream Ablation Deltas (Macro-F1 vs Full): {'lexical': -0.0409, 'semantic': -0.0082, 'stylometric': 0.0017, 'readability': -0.0016}
+[2026-10-28 19:24:40] [INFO] [run_pipeline]: --- Part 2: Uncertainty Gate Ablations on Identical Full Predictions ---
+[2026-10-28 19:24:40] [INFO] [run_pipeline]: [STAGE COMPLETE] Ablation studies completed in 944.68s
+[2026-10-28 19:24:40] [INFO] [run_pipeline]: [RESUME] Loading explainability explainer from cache...
+[2026-10-28 19:24:40] [INFO] [run_pipeline]: >>> STAGE 14: Synthesizing Final Comprehensive Markdown Report
+[2026-10-28 19:24:40] [INFO] [run_pipeline]: Final report saved to C:\Users\khyat\OneDrive\Desktop\cagefake_nlp\CAGE-FAKE\outputs\reports\final_report.md
+[2026-10-28 21:35:41] [INFO] [run_pipeline]: [RESUME] Loading cached data splits from stage_data.joblib...
+[2026-10-28 21:35:41] [INFO] [run_pipeline]: [RESUME] Loading preprocessed representations from stage_preprocess.joblib...
+[2026-10-28 21:35:42] [INFO] [run_pipeline]: [RESUME] Loading extracted features from stage_features.joblib...
+[2026-10-28 21:35:43] [INFO] [run_pipeline]: >>> STAGE: Out-Of-Distribution (OOD) Detector Training & Threshold Tuning
+[2026-10-28 21:35:45] [INFO] [run_pipeline]: OOD detector tuned: rho=0.5600, coverage floor=74.09%
+[2026-10-28 21:35:48] [INFO] [run_pipeline]: [STAGE COMPLETE] OOD detector fit and saved in 5.57s
+[2026-10-29 09:36:31] [ERROR] [run_pipeline]: Prediction failed: name 'np' is not defined
+Traceback (most recent call last):
+  File "C:\Users\khyat\OneDrive\Desktop\cagefake_nlp\CAGE-FAKE\run_pipeline.py", line 1250, in run_prediction_cli
+    res = pipeline.predict(
+          ^^^^^^^^^^^^^^^^^
+  File "C:\Users\khyat\OneDrive\Desktop\cagefake_nlp\CAGE-FAKE\src\predict.py", line 366, in predict
+    gate_res = self.decision_engine.evaluate(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\khyat\OneDrive\Desktop\cagefake_nlp\CAGE-FAKE\src\decision_rule.py", line 182, in evaluate
+    avg_sim = float(np.mean([float(c.get("similarity", c.get("dense_score", 0.70))) for c in high_sim_supported])) if high_sim_supported else 0.75
+                    ^^
+NameError: name 'np' is not defined

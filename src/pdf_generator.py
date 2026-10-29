@@ -39,7 +39,15 @@ TRIGGER_LABELS = {
     "both_triggers": "Dual Safety Triggers (Confidence & Disagreement)",
     "low_confidence": "Low Calibrated Confidence",
     "high_disagreement": "High Base Disagreement",
+    "high_view_disagreement": "High Multi-View Dissent",
     "evidence_conflict": "External Evidence Conflict",
+    "evidence_corroborated": "Evidence Corroborated (Trusted Multi-Source)",
+    "evidence_contradicted": "Evidence Contradicted (Fact-Check Refutation)",
+    "domain_shift_no_evidence": "Domain Shift (Out-Of-Distribution & Zero Corroboration)",
+    "domain_shift_unverified": "Domain Shift Abstain (Out-Of-Distribution)",
+    "evidence_absence_abstain": "Evidence Absence Abstain (Unverified Topic)",
+    "tri_gate_accepted": "Tri-Gate Accepted Consensus",
+    "style_lexical_split": "Stylometric vs Lexical Split (RF Dissent)",
     "none": "Verified Evidence & Model Consensus",
 }
 
@@ -292,18 +300,30 @@ def generate_pdf_report(
     if len(url_text) > 65:
         url_text = url_text[:62] + "..."
 
+    ood_loaded = gate_result.get("ood_detector_loaded", article_meta.get("ood_detector_loaded", True))
+    ood_label = "Loaded (SBERT & Vocab)" if ood_loaded else "Fallback (Vocab Coverage < 60%)"
+
     source_text = (
         f"<b>Title:</b> {title_text}<br/>"
         f"<b>Source:</b> <font color='#2563eb'>{url_text}</font><br/>"
         f"<b>Word Count:</b> {article_meta.get('word_count', 0):,} words | "
         f"<b>Extraction:</b> {article_meta.get('extraction_status', 'OK')}<br/>"
+        f"<b>OOD Detector:</b> {ood_label} | "
         f"<b>Triage Policy:</b> Evidence-Grounded Three-Way Gating"
     )
+
+    conf_type = gate_result.get("confidence_type", "calibrated")
+    if conf_type == "evidence_rule":
+        conf_label = "Evidence Confidence (rule-based)"
+    elif conf_type == "abstain":
+        conf_label = "Abstention Confidence"
+    else:
+        conf_label = "Calibrated Confidence"
 
     trigger_display = TRIGGER_LABELS.get(trigger, trigger.replace("_", " ").title())
     verdict_text = (
         f"<font size=13 color='{v_title_color}'><b>TRIAGE VERDICT: {decision}</b></font><br/>"
-        f"<b>Calibrated Confidence:</b> {conf:.1%} <font color='#64748b'>(&tau; = {tau_val:.1%})</font><br/>"
+        f"<b>{conf_label}:</b> {conf:.1%} <font color='#64748b'>(&tau; = {tau_val:.1%})</font><br/>"
         f"<b>Model Disagreement (std):</b> {disagreement:.3f} <font color='#64748b'>(&delta; = {delta_val:.2f})</font><br/>"
         f"<b>Safety Trigger:</b> {trigger_display}"
     )

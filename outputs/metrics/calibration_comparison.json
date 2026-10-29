@@ -1,27 +1,27 @@
 [
     {
         "model_name": "Random Forest",
-        "uncal_accuracy": 0.8557,
-        "cal_accuracy": 0.859,
-        "uncal_ece": 0.1488,
-        "cal_ece": 0.0287,
-        "ece_reduction_pct": 80.71,
-        "uncal_brier": 0.1243,
-        "cal_brier": 0.0965,
-        "uncal_log_loss": 0.4117,
-        "cal_log_loss": 0.3164
+        "uncal_accuracy": 0.8098,
+        "cal_accuracy": 0.8115,
+        "uncal_ece": 0.077,
+        "cal_ece": 0.0431,
+        "ece_reduction_pct": 44.03,
+        "uncal_brier": 0.1404,
+        "cal_brier": 0.1349,
+        "uncal_log_loss": 0.4393,
+        "cal_log_loss": 0.4194
     },
     {
         "model_name": "XGBoost",
-        "uncal_accuracy": 0.8705,
-        "cal_accuracy": 0.8721,
-        "uncal_ece": 0.0371,
-        "cal_ece": 0.0273,
-        "ece_reduction_pct": 26.42,
-        "uncal_brier": 0.0895,
-        "cal_brier": 0.0886,
-        "uncal_log_loss": 0.2962,
-        "cal_log_loss": 0.2901
+        "uncal_accuracy": 0.8508,
+        "cal_accuracy": 0.8459,
+        "uncal_ece": 0.055,
+        "cal_ece": 0.0196,
+        "ece_reduction_pct": 64.36,
+        "uncal_brier": 0.1093,
+        "cal_brier": 0.1087,
+        "uncal_log_loss": 0.3453,
+        "cal_log_loss": 0.3413
     },
     {
         "model_name": "LightGBM",
@@ -37,26 +37,26 @@
     },
     {
         "model_name": "Logistic Regression",
-        "uncal_accuracy": 0.8951,
-        "cal_accuracy": 0.8984,
-        "uncal_ece": 0.0372,
+        "uncal_accuracy": 0.9361,
+        "cal_accuracy": 0.941,
+        "uncal_ece": 0.1322,
         "cal_ece": 0.0305,
-        "ece_reduction_pct": 18.01,
-        "uncal_brier": 0.0799,
-        "cal_brier": 0.0783,
-        "uncal_log_loss": 0.2631,
-        "cal_log_loss": 0.2554
+        "ece_reduction_pct": 76.93,
+        "uncal_brier": 0.0698,
+        "cal_brier": 0.0482,
+        "uncal_log_loss": 0.2612,
+        "cal_log_loss": 0.1657
     },
     {
         "model_name": "Stacking Meta-Learner",
-        "uncal_accuracy": 0.8984,
-        "cal_accuracy": 0.8967,
-        "uncal_ece": 0.0372,
-        "cal_ece": 0.0276,
-        "ece_reduction_pct": 25.81,
-        "uncal_brier": 0.0755,
-        "cal_brier": 0.0747,
-        "uncal_log_loss": 0.2484,
-        "cal_log_loss": 0.2478
+        "uncal_accuracy": 0.941,
+        "cal_accuracy": 0.941,
+        "uncal_ece": 0.0182,
+        "cal_ece": 0.0274,
+        "ece_reduction_pct": -50.55,
+        "uncal_brier": 0.043,
+        "cal_brier": 0.0428,
+        "uncal_log_loss": 0.1515,
+        "cal_log_loss": 0.151
     }
 ]

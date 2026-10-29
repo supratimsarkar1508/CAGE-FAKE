@@ -128,5 +128,9 @@ class SemanticFeatureExtractor:
 
         return embeddings
 
+    def transform(self, texts: List[str]) -> np.ndarray:
+        return self.encode(texts)
+
     def get_feature_names(self) -> List[str]:
         return [f"sbert_dim_{i}" for i in range(self.dim)]
+

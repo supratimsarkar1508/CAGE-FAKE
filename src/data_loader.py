@@ -175,6 +175,43 @@ def load_and_standardize_data(csv_path: Path | str = DATA_PATH) -> Tuple[pd.Data
 
     standardized_df["target"] = raw_labels.map(label_map)
     standardized_df["target_name"] = standardized_df["target"].map({1: "FAKE", 0: "REAL"})
+    standardized_df["source_dataset"] = csv_path.name
+
+    # Check for additional datasets in data/extra/*.csv
+    extra_dir = csv_path.parent / "extra"
+    extra_dir.mkdir(parents=True, exist_ok=True)
+    extra_dfs = [standardized_df]
+
+    for extra_path in sorted(extra_dir.glob("*.csv")):
+        try:
+            e_df = pd.read_csv(extra_path)
+            if len(e_df) == 0:
+                continue
+            e_title_col, e_body_col, e_label_col = auto_detect_columns(e_df)
+            e_std = pd.DataFrame()
+            e_std["title"] = e_df[e_title_col].fillna("").astype(str).str.strip()
+            e_std["body"] = e_df[e_body_col].fillna("").astype(str).str.strip()
+
+            e_empty_body = e_std["body"].str.len() == 0
+            if e_empty_body.any():
+                e_std.loc[e_empty_body, "body"] = e_std.loc[e_empty_body, "title"]
+
+            e_raw_labels = e_df[e_label_col].astype(str).str.strip().str.upper()
+            e_std["target"] = e_raw_labels.map(label_map)
+            # Filter unmapped labels if any
+            valid_mask = e_std["target"].notnull()
+            e_std = e_std[valid_mask].copy()
+            e_std["target"] = e_std["target"].astype(int)
+            e_std["target_name"] = e_std["target"].map({1: "FAKE", 0: "REAL"})
+            e_std["source_dataset"] = extra_path.name
+            extra_dfs.append(e_std)
+            logger.info(f"Loaded extra dataset '{extra_path.name}' with {len(e_std)} records.")
+        except Exception as exc:
+            logger.warning(f"Could not load extra dataset '{extra_path}': {exc}")
+
+    if len(extra_dfs) > 1:
+        standardized_df = pd.concat(extra_dfs, ignore_index=True)
+        logger.info(f"Merged {len(extra_dfs)} datasets. Total combined records before deduplication: {len(standardized_df)}")
 
     # Drop non-informative empty records (both title and body empty)
     non_empty_mask = (standardized_df["title"].str.len() > 0) | (standardized_df["body"].str.len() > 0)
@@ -195,7 +232,7 @@ def load_and_standardize_data(csv_path: Path | str = DATA_PATH) -> Tuple[pd.Data
     else:
         logger.info("Conflicting duplicate bodies check: 0 conflicting label clusters detected.")
 
-    # Handle duplicates to prevent leakage across splits (retain first clean occurrence)
+    # Handle duplicates across datasets to prevent leakage across splits (retain first clean occurrence)
     initial_len = len(standardized_df)
     standardized_df = standardized_df.drop_duplicates(subset=["body"]).reset_index(drop=True)
     dropped_dupes = initial_len - len(standardized_df)
@@ -211,12 +248,14 @@ def load_and_standardize_data(csv_path: Path | str = DATA_PATH) -> Tuple[pd.Data
     stats["clean_class_percentages"] = clean_percentages
     stats["class_counts"] = clean_counts
     stats["class_percentages"] = clean_percentages
+    stats["source_distribution"] = standardized_df["source_dataset"].value_counts().to_dict()
 
     if dropped_dupes > 0:
         logger.info(
             f"Deduplication: removed {dropped_dupes} duplicate body texts to prevent train-test data leakage. "
             f"Final clean unique articles: {len(standardized_df)} | Clean Class Counts: {clean_counts} ({clean_percentages}%)"
         )
+    logger.info(f"Dataset source distribution: {stats['source_distribution']}")
 
     return standardized_df, stats
 
@@ -231,6 +270,7 @@ def create_stratified_splits(
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Creates strict 4-way stratified splits: 70 train / 10 val / 10 calibration / 10 test.
+    Stratifies by label AND source_dataset (with graceful fallback if rare strata exist).
     Ensures calibration is never touched during training and test remains untouched until final eval.
     Generates a cryptographic split manifest verifying zero leakage.
     """
@@ -240,29 +280,53 @@ def create_stratified_splits(
 
     assert np.isclose(train_ratio + val_ratio + calib_ratio + test_ratio, 1.0), "Split ratios must sum to 1.0"
 
+    # Joint stratification by label AND source_dataset
+    if "source_dataset" in df.columns and df["source_dataset"].nunique() > 1:
+        joint_strata = df["target"].astype(str) + "_" + df["source_dataset"].astype(str)
+        if (joint_strata.value_counts() < 4).any():
+            logger.warning("Some (label, source_dataset) strata have < 4 samples; stratifying by target only.")
+            strat_key = df["target"]
+        else:
+            logger.info(f"Stratifying splits jointly by label AND source_dataset ({joint_strata.nunique()} strata).")
+            strat_key = joint_strata
+    else:
+        strat_key = df["target"]
+
     # Step 1: Split into Train (70%) and Temp (30%)
     temp_ratio = val_ratio + calib_ratio + test_ratio
     train_df, temp_df = train_test_split(
         df,
         test_size=temp_ratio,
-        stratify=df["target"],
+        stratify=strat_key,
         random_state=seed,
     )
 
     # Step 2: Split Temp (30%) into Val (10%), Calib (10%), Test (10%)
+    if "source_dataset" in temp_df.columns and temp_df["source_dataset"].nunique() > 1:
+        temp_joint = temp_df["target"].astype(str) + "_" + temp_df["source_dataset"].astype(str)
+        temp_strat = temp_df["target"] if (temp_joint.value_counts() < 3).any() else temp_joint
+    else:
+        temp_strat = temp_df["target"]
+
     val_size_in_temp = val_ratio / temp_ratio
     val_df, remaining_temp_df = train_test_split(
         temp_df,
         test_size=(1.0 - val_size_in_temp),
-        stratify=temp_df["target"],
+        stratify=temp_strat,
         random_state=seed,
     )
+
+    if "source_dataset" in remaining_temp_df.columns and remaining_temp_df["source_dataset"].nunique() > 1:
+        rem_joint = remaining_temp_df["target"].astype(str) + "_" + remaining_temp_df["source_dataset"].astype(str)
+        rem_strat = remaining_temp_df["target"] if (rem_joint.value_counts() < 2).any() else rem_joint
+    else:
+        rem_strat = remaining_temp_df["target"]
 
     calib_size_in_remaining = calib_ratio / (calib_ratio + test_ratio)
     calib_df, test_df = train_test_split(
         remaining_temp_df,
         test_size=(1.0 - calib_size_in_remaining),
-        stratify=remaining_temp_df["target"],
+        stratify=rem_strat,
         random_state=seed,
     )
 

@@ -1,14 +1,14 @@
 Category,Setting,Dimensions,Accuracy,Macro-F1,Delta_F1,Precision,Recall,ECE,Coverage,Selective Accuracy,Notes
-Feature Stream,STREAM-FULL: Full Multi-Stream Model (A+B+C+D),10408,0.8967,0.8967,0.0,0.8967,0.8966,0.0276,1.0,0.8967,Full model baseline (all streams included)
-Feature Stream,STREAM-NO-LEX: Ablation: Without Lexical TF-IDF (Streams B+C+D),403,0.8852,0.8852,-0.0115,0.8852,0.8852,0.0516,1.0,0.8852,Genuinely retrained model excluding lexical
-Feature Stream,STREAM-NO-SEM: Ablation: Without Semantic SBERT (Streams A+C+D),10024,0.9131,0.913,0.0163,0.9139,0.9127,0.0266,1.0,0.9131,Genuinely retrained model excluding semantic
-Feature Stream,STREAM-NO-STYLO: Ablation: Without Stylometric Features (Streams A+B+D),10393,0.8918,0.8918,-0.0049,0.8918,0.8919,0.0231,1.0,0.8918,Genuinely retrained model excluding stylometric
-Feature Stream,STREAM-NO-READ: Ablation: Without Readability Metrics (Streams A+B+C),10404,0.8984,0.8983,0.0016,0.8983,0.8984,0.0344,1.0,0.8984,Genuinely retrained model excluding readability
-Uncertainty Gate,GATE-01: Setting 1: No Gate / Accept All,10408,0.8967,0.8967,0.0,0.8967,0.8966,0.0276,1.0,0.8967,"tau=0.50, delta=1.00"
-Uncertainty Gate,GATE-02: Setting 2: Disagreement-Only Gate (delta=0.20),10408,0.8967,0.8967,0.0,0.8967,0.8966,0.0276,0.9869,0.897,"tau=0.50, delta=0.20"
-Uncertainty Gate,GATE-03: Setting 3: Confidence-Only Gate (tau=0.80),10408,0.8967,0.8967,0.0,0.8967,0.8966,0.0276,0.8508,0.9499,"tau=0.80, delta=1.00"
-Uncertainty Gate,"GATE-04: Setting 4: Full Dual-Trigger Gate (tau=0.80, delta=0.20)",10408,0.8967,0.8967,0.0,0.8967,0.8966,0.0276,0.8459,0.9496,"tau=0.80, delta=0.20"
-Uncertainty Gate,"GATE-05: Setting 5: Strict Disagreement (tau=0.80, delta=0.15)",10408,0.8967,0.8967,0.0,0.8967,0.8966,0.0276,0.7967,0.9527,"tau=0.80, delta=0.15"
-Uncertainty Gate,"GATE-06: Setting 6: Relaxed Disagreement (tau=0.80, delta=0.25)",10408,0.8967,0.8967,0.0,0.8967,0.8966,0.0276,0.8492,0.9498,"tau=0.80, delta=0.25"
-Uncertainty Gate,"GATE-07: Setting 7: Strict Confidence (tau=0.85, delta=0.20)",10408,0.8967,0.8967,0.0,0.8967,0.8966,0.0276,0.7984,0.9589,"tau=0.85, delta=0.20"
-Uncertainty Gate,"GATE-08: Setting 8: Relaxed Confidence (tau=0.70, delta=0.20)",10408,0.8967,0.8967,0.0,0.8967,0.8966,0.0276,0.9115,0.9227,"tau=0.70, delta=0.20"
+Feature Stream,STREAM-FULL: Full Multi-Stream Model (A+B+C+D),10408,0.941,0.9409,0.0,0.9413,0.9408,0.0274,1.0,0.941,Full model baseline (all streams included)
+Feature Stream,STREAM-NO-LEX: Ablation: Without Lexical TF-IDF (Streams B+C+D),403,0.9,0.9,-0.0409,0.9,0.9001,0.0143,1.0,0.9,Genuinely retrained model excluding lexical
+Feature Stream,STREAM-NO-SEM: Ablation: Without Semantic SBERT (Streams A+C+D),10024,0.9328,0.9327,-0.0082,0.9336,0.9324,0.0252,1.0,0.9328,Genuinely retrained model excluding semantic
+Feature Stream,STREAM-NO-STYLO: Ablation: Without Stylometric Features (Streams A+B+D),10393,0.9426,0.9426,0.0017,0.9428,0.9424,0.022,1.0,0.9426,Genuinely retrained model excluding stylometric
+Feature Stream,STREAM-NO-READ: Ablation: Without Readability Metrics (Streams A+B+C),10404,0.9393,0.9393,-0.0016,0.9397,0.9391,0.0275,1.0,0.9393,Genuinely retrained model excluding readability
+Uncertainty Gate,GATE-01: Setting 1: No Gate / Accept All,10408,0.941,0.9409,0.0,0.9413,0.9408,0.0274,1.0,0.941,"tau=0.50, delta=1.00"
+Uncertainty Gate,GATE-02: Setting 2: Disagreement-Only Gate (delta=0.25),10408,0.941,0.9409,0.0,0.9413,0.9408,0.0274,0.9443,0.9427,"tau=0.50, delta=0.25"
+Uncertainty Gate,GATE-03: Setting 3: Confidence-Only Gate (tau=0.80),10408,0.941,0.9409,0.0,0.9413,0.9408,0.0274,0.8672,0.9792,"tau=0.80, delta=1.00"
+Uncertainty Gate,"GATE-04: Setting 4: Full Dual-Trigger Gate (tau=0.80, delta=0.25)",10408,0.941,0.9409,0.0,0.9413,0.9408,0.0274,0.8246,0.9781,"tau=0.80, delta=0.25"
+Uncertainty Gate,"GATE-05: Setting 5: Strict Disagreement (tau=0.80, delta=0.15)",10408,0.941,0.9409,0.0,0.9413,0.9408,0.0274,0.6131,0.9813,"tau=0.80, delta=0.15"
+Uncertainty Gate,"GATE-06: Setting 6: Relaxed Disagreement (tau=0.80, delta=0.25)",10408,0.941,0.9409,0.0,0.9413,0.9408,0.0274,0.8246,0.9781,"tau=0.80, delta=0.25"
+Uncertainty Gate,"GATE-07: Setting 7: Strict Confidence (tau=0.85, delta=0.25)",10408,0.941,0.9409,0.0,0.9413,0.9408,0.0274,0.7934,0.9876,"tau=0.85, delta=0.25"
+Uncertainty Gate,"GATE-08: Setting 8: Relaxed Confidence (tau=0.70, delta=0.25)",10408,0.941,0.9409,0.0,0.9413,0.9408,0.0274,0.8754,0.9719,"tau=0.70, delta=0.25"

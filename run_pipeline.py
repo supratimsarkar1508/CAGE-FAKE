@@ -11,6 +11,10 @@ Usage:
 """
 
 import sys
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
 import os
 import time
 import argparse
@@ -33,6 +37,7 @@ from config import (
     CHECKPOINTS_DIR,
     OUTPUTS_DIR,
     FIGURES_DIR,
+    FIGURES_PDF_DIR,
     METRICS_DIR,
     REPORTS_DIR,
     RANDOM_SEED,
@@ -48,7 +53,8 @@ from src.feature_pipeline import UnifiedFeaturePipeline
 from src.balancing import ManifoldBalancingPipeline
 from src.base_models import BaseEnsemble
 from src.stacking import StackingClassifier
-from src.calibration import ModelCalibrator, compute_ece
+from src.calibration import ModelCalibrator, compute_ece, select_method
+from src.ood_detector import OODDetector
 from src.uncertainty import UncertaintyGate, ThresholdOptimizer
 from src.explainability import SHAPExplainer
 from src.transformer_baseline import TransformerBaseline
@@ -110,9 +116,11 @@ def stage_preprocess(data_dict: Dict[str, Any], force: bool = False):
 
     res = {
         "train_raw": train_raw, "train_clean": train_clean, "y_train": data_dict["train_df"]["target"].values,
+        "train_sources": data_dict["train_df"].get("source_dataset", pd.Series(["news.csv"] * len(data_dict["train_df"]))).values,
         "val_raw": val_raw, "val_clean": val_clean, "y_val": data_dict["val_df"]["target"].values,
         "calib_raw": calib_raw, "calib_clean": calib_clean, "y_calib": data_dict["calib_df"]["target"].values,
         "test_raw": test_raw, "test_clean": test_clean, "y_test": data_dict["test_df"]["target"].values,
+        "test_sources": data_dict["test_df"].get("source_dataset", pd.Series(["news.csv"] * len(data_dict["test_df"]))).values,
     }
     save_artifact(res, stage_file)
     logger.info(f"[STAGE COMPLETE] Preprocessing finished in {time.time() - t0:.2f}s")
@@ -147,9 +155,11 @@ def stage_features(prep_dict: Dict[str, Any], force: bool = False):
         "X_calib": X_calib,
         "X_test": X_test,
         "y_train": prep_dict["y_train"],
+        "train_sources": prep_dict.get("train_sources"),
         "y_val": prep_dict["y_val"],
         "y_calib": prep_dict["y_calib"],
         "y_test": prep_dict["y_test"],
+        "test_sources": prep_dict.get("test_sources"),
     }
     save_artifact(pipeline, TRAINED_MODELS_DIR / "feature_pipeline.joblib")
     save_artifact(res, stage_file)
@@ -191,12 +201,14 @@ def stage_balance(feat_dict: Dict[str, Any], force: bool = False):
         "X_train_bal":   feat_dict["X_train"],   # alias
         "y_train_bal":   feat_dict["y_train"],
         "y_train":       feat_dict["y_train"],
+        "train_sources": feat_dict.get("train_sources"),
         "X_val_dense":   feat_dict["X_val"],
         "X_calib_dense": feat_dict["X_calib"],
         "X_test_dense":  feat_dict["X_test"],
         "y_val":         feat_dict["y_val"],
         "y_calib":       feat_dict["y_calib"],
         "y_test":        feat_dict["y_test"],
+        "test_sources":  feat_dict.get("test_sources"),
         "stream_boundaries": feat_dict["pipeline"].stream_boundaries,
     }
     save_artifact(res, stage_file)
@@ -261,7 +273,7 @@ def stage_calibration(bal_dict: Dict[str, Any], stack_dict: Dict[str, Any], forc
         return load_artifact(stage_file)
 
     t0 = time.time()
-    logger.info(">>> STAGE 7: Isolated Post-Hoc Calibration (Platt Scaling per Model on Calibration Split)")
+    logger.info(">>> STAGE 7: Isolated Post-Hoc Calibration (Evaluated via Validation ECE Optimization)")
     stacking_model = stack_dict["stacking_model"]
     X_calib = bal_dict["X_calib_dense"]
     y_calib = bal_dict["y_calib"]
@@ -276,12 +288,22 @@ def stage_calibration(bal_dict: Dict[str, Any], stack_dict: Dict[str, Any], forc
     p_stack_calib, _, _ = stacking_model.predict_proba(X_calib)
     c_stack = ModelCalibrator(method="sigmoid")
     c_stack.fit(p_stack_calib, y_calib)
+
+    # Select optimal calibration method on VALIDATION split by lowest ECE
+    X_val = bal_dict["X_val_dense"]
+    y_val = bal_dict["y_val"]
+    p_stack_val, _, _ = stacking_model.predict_proba(X_val)
+    best_method = c_stack.select_method(p_stack_val, y_val)
+    print(f"\n[CALIBRATION] Lowest ECE method on Validation: '{best_method}' (selected for stack calibrator)")
+    logger.info(f"Selected calibration method for stacking model: {best_method}")
+
     calibrators["stack"] = c_stack
 
     save_artifact(c_stack, TRAINED_MODELS_DIR / "calibrator.joblib")
     res = {
         "calibrator": c_stack,
         "calibrators_dict": calibrators,
+        "selected_method": best_method,
         "fit_time": time.time() - t0,
     }
     save_artifact(res, stage_file)
@@ -389,6 +411,54 @@ def stage_explain(feat_dict: Dict[str, Any], bal_dict: Dict[str, Any], stack_dic
     }
     save_artifact(res, stage_file)
     logger.info(f"[STAGE COMPLETE] Explainability stage finished in {time.time() - t0:.2f}s")
+    return res
+
+
+def stage_ood(feat_dict: Dict[str, Any], prep_dict: Dict[str, Any], force: bool = False):
+    stage_file = CACHE_DIR / "stage_ood.joblib"
+    ood_artifact = TRAINED_MODELS_DIR / "ood_detector.joblib"
+    if stage_file.exists() and ood_artifact.exists() and not force:
+        logger.info("[RESUME] Loading OOD detector from stage_ood.joblib...")
+        detector = load_artifact(ood_artifact)
+        print(f"\n[OOD DETECTOR] Loaded: rho = {detector.threshold_rho:.4f}, min vocab coverage floor = {detector.vocab_coverage_threshold:.2%}")
+        return load_artifact(stage_file)
+
+    t0 = time.time()
+    logger.info(">>> STAGE: Out-Of-Distribution (OOD) Detector Training & Threshold Tuning")
+    pipeline = feat_dict["pipeline"]
+    s_idx, e_idx = pipeline.stream_boundaries["semantic"]
+
+    # SBERT embeddings directly from feature matrices
+    X_train_sbert = feat_dict["X_train"][:, s_idx:e_idx].toarray()
+    X_val_sbert = feat_dict["X_val"][:, s_idx:e_idx].toarray()
+
+    vocab = set(pipeline.lexical_extractor.vectorizer.vocabulary_.keys())
+
+    detector = OODDetector()
+    detector.fit(prep_dict["train_raw"], X_train_sbert, vocab=vocab)
+    rho = detector.tune_threshold(prep_dict["val_raw"], X_val_sbert)
+
+    print(f"\n[OOD DETECTOR] Tuned threshold rho = {detector.threshold_rho:.4f}, min vocab coverage floor = {detector.vocab_coverage_threshold:.2%}")
+    logger.info(f"OOD detector tuned: rho={detector.threshold_rho:.4f}, coverage floor={detector.vocab_coverage_threshold:.2%}")
+
+    save_artifact(detector, ood_artifact)
+
+    # Plot and save histogram
+    val_scores = [detector.evaluate_single(t, emb)["ood_score"] for t, emb in zip(prep_dict["val_raw"], X_val_sbert)]
+    detector.plot_ood_histogram(
+        val_scores,
+        FIGURES_PDF_DIR / "07_ood_score_distribution.pdf",
+        FIGURES_DIR / "ood_score_distribution.png",
+    )
+
+    res = {
+        "detector": detector,
+        "threshold_rho": detector.threshold_rho,
+        "vocab_coverage_threshold": detector.vocab_coverage_threshold,
+        "fit_time": time.time() - t0,
+    }
+    save_artifact(res, stage_file)
+    logger.info(f"[STAGE COMPLETE] OOD detector fit and saved in {time.time() - t0:.2f}s")
     return res
 
 
@@ -526,6 +596,56 @@ def stage_evaluate(bal_dict: Dict[str, Any], stack_dict: Dict[str, Any], calib_d
     plot_confusion_matrix(y_test, y_pred_cal, "CAGE-Fake (Full Test Set)", FIGURES_DIR / "cm_cage_fake.png")
     if np.sum(accepted_mask) > 0:
         plot_confusion_matrix(y_test[accepted_mask], y_pred_cal[accepted_mask], "CAGE-Fake (Accepted Triage)", FIGURES_DIR / "cm_cage_fake_accepted.png")
+
+    # Per-source dataset metrics and Cross-domain evaluation (Phase 4, Item 14)
+    test_sources = bal_dict.get("test_sources")
+    train_sources = bal_dict.get("train_sources")
+    if test_sources is not None and len(np.unique(test_sources)) > 1:
+        logger.info(f"Computing per-source dataset metrics on TEST split across: {np.unique(test_sources)}...")
+        per_source_rows = []
+        for src in np.unique(test_sources):
+            src_mask = (test_sources == src)
+            if np.sum(src_mask) == 0:
+                continue
+            y_test_src = y_test[src_mask]
+            p_cal_src = p_test_cal[src_mask]
+            y_pred_src = (p_cal_src >= 0.5).astype(int)
+            m_src = evaluate_predictions(y_test_src, y_pred_src, p_pred=p_cal_src, model_name=f"CAGE-Fake [{src}]")
+            m_src["source_dataset"] = str(src)
+            per_source_rows.append(m_src)
+
+        per_source_df = pd.DataFrame(per_source_rows)
+        per_source_df.to_csv(METRICS_DIR / "per_source_metrics.csv", index=False)
+        save_metrics(per_source_rows, "per_source_metrics.json")
+        logger.info(f"Per-source metrics saved to {METRICS_DIR / 'per_source_metrics.csv'}")
+
+        # Cross-domain test (train on domain A -> test on domain B)
+        if train_sources is not None and len(np.unique(train_sources)) > 1:
+            logger.info("Computing cross-domain generalization metrics across sources...")
+            unique_domains = list(np.unique(train_sources))
+            cross_rows = []
+            from sklearn.linear_model import LogisticRegression
+            for train_dom in unique_domains:
+                for test_dom in unique_domains:
+                    if train_dom == test_dom:
+                        continue
+                    tr_mask = (train_sources == train_dom)
+                    te_mask = (test_sources == test_dom)
+                    if np.sum(tr_mask) > 10 and np.sum(te_mask) > 10:
+                        clf = LogisticRegression(max_iter=1000, random_state=RANDOM_SEED)
+                        clf.fit(bal_dict["X_train_dense"][tr_mask], bal_dict["y_train"][tr_mask])
+                        p_cross = clf.predict_proba(bal_dict["X_test_dense"][te_mask])[:, 1]
+                        y_pred_cross = (p_cross >= 0.5).astype(int)
+                        m_cross = evaluate_predictions(y_test[te_mask], y_pred_cross, p_pred=p_cross, model_name=f"{train_dom} -> {test_dom}")
+                        m_cross["train_domain"] = str(train_dom)
+                        m_cross["test_domain"] = str(test_dom)
+                        cross_rows.append(m_cross)
+
+            if cross_rows:
+                cross_df = pd.DataFrame(cross_rows)
+                cross_df.to_csv(METRICS_DIR / "cross_domain_metrics.csv", index=False)
+                save_metrics(cross_rows, "cross_domain_metrics.json")
+                logger.info(f"Cross-domain metrics saved to {METRICS_DIR / 'cross_domain_metrics.csv'}")
 
     res = {
         "comparison_df": comparison_df,
@@ -1005,6 +1125,7 @@ def run_training_pipeline(sample: Optional[int] = None, skip_transformer: bool =
     stack_dict = stage_stacking(bal_dict, force=force)
     calib_dict = stage_calibration(bal_dict, stack_dict, force=force)
     thresh_dict = stage_thresholds(bal_dict, stack_dict, calib_dict, force=force)
+    ood_dict = stage_ood(feat_dict, prep_dict, force=force)
     explain_dict = stage_explain(feat_dict, bal_dict, stack_dict, force=force)
 
     elapsed_total = time.time() - start_total
@@ -1019,6 +1140,7 @@ def run_training_pipeline(sample: Optional[int] = None, skip_transformer: bool =
     print("    - stacking_model.joblib (OOF Meta-Learner)")
     print("    - calibrator.joblib (Platt Scaling)")
     print("    - uncertainty_gate.joblib (Uncertainty Gate)")
+    print("    - ood_detector.joblib (SBERT Mahalanobis & Vocab Coverage OOD Detector)")
     print("    - shap_explainer.joblib (Explainability Engine)")
     print("==================================================\n")
     return {
@@ -1030,6 +1152,7 @@ def run_training_pipeline(sample: Optional[int] = None, skip_transformer: bool =
         "stack_dict": stack_dict,
         "calib_dict": calib_dict,
         "thresh_dict": thresh_dict,
+        "ood_dict": ood_dict,
         "explain_dict": explain_dict,
     }
 
@@ -1047,6 +1170,7 @@ def run_evaluation_pipeline(skip_transformer: bool = True, force: bool = False):
     stack_dict = stage_stacking(bal_dict, force=force)
     calib_dict = stage_calibration(bal_dict, stack_dict, force=force)
     thresh_dict = stage_thresholds(bal_dict, stack_dict, calib_dict, force=force)
+    ood_dict = stage_ood(feat_dict, prep_dict, force=force)
     trans_dict = stage_transformer(prep_dict, skip_transformer=skip_transformer, force=force)
 
     eval_dict = stage_evaluate(bal_dict, stack_dict, calib_dict, thresh_dict, trans_dict, force=force)
@@ -1136,11 +1260,12 @@ def run_prediction_cli(
             print(json.dumps(res["explainable_json"], indent=2))
     except ArticleExtractionError as e:
         if output_json:
+            # NOTE: Only per_claim_evidence_status is emitted here (canonical key).
+            # claim_verifications was a duplicate of the same field and has been removed.
             print(json.dumps({
                 "verdict": "UNCERTAIN",
                 "confidence": 0.0,
                 "per_claim_evidence_status": [],
-                "claim_verifications": [],
                 "linguistic_red_flags": [f"URL extraction error: {e}"],
                 "reasoning_summary": "Article content could not be extracted from URL. Aborted with UNCERTAIN per trustworthy AI requirements."
             }, indent=2))
@@ -1186,7 +1311,7 @@ Examples:
     parser.add_argument("--sources", nargs="*", default=None, help="Optional external retrieved evidence statements or sources")
     parser.add_argument("--no-pdf", action="store_true", help="Skip PDF report generation during prediction")
     parser.add_argument("--json", action="store_true", help="Output explainable JSON result directly to stdout")
-    parser.add_argument("--confidence-threshold", type=float, default=0.65, help="Configurable minimum calibrated confidence threshold (default 0.65)")
+    parser.add_argument("--confidence-threshold", type=float, default=None, help="Override calibrated confidence threshold tau (default: use tau* locked on validation set)")
     parser.add_argument("--sample", type=int, default=None, help="Subsample N rows for smoke testing")
     parser.add_argument("--with-transformer", action="store_true", help="Enable DeBERTa transformer fine-tuning baseline")
     parser.add_argument("--force", action="store_true", help="Force recomputation ignoring cache")

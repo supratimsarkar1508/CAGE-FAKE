@@ -15,6 +15,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from config import FIGURES_PDF_DIR
 from src.utils import setup_logger
 
 logger = setup_logger("unique_features")
@@ -160,6 +161,13 @@ class ModelDisagreementMeter:
 
         save_path.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        pdf_path = save_path.with_suffix(".pdf")
+        plt.savefig(pdf_path, format="pdf", bbox_inches="tight")
+        try:
+            FIGURES_PDF_DIR.mkdir(parents=True, exist_ok=True)
+            plt.savefig(FIGURES_PDF_DIR / "02_disagreement_meter.pdf", format="pdf", bbox_inches="tight")
+        except Exception:
+            pass
         plt.close()
         return save_path
 
@@ -298,13 +306,15 @@ class CounterfactualExplainer:
                     summary = (
                         f"By neutralizing {len(changed_fragments)} linguistic markers, the predicted probability of FAKE "
                         f"shifted by {shift * 100:+.1f} percentage points (from {original_p_fake:.1%} to {simulated_p:.1%}), "
-                        f"flipping the model's verdict from {orig_verdict} to {sim_verdict}."
+                        f"flipping the text classifier's verdict from {orig_verdict} to {sim_verdict} "
+                        f"(note: the final triage verdict may differ when evidence overrides it)."
                     )
                 else:
                     summary = (
                         f"Neutralizing {len(changed_fragments)} linguistic markers resulted in a signed probability shift "
                         f"of {shift * 100:+.1f} percentage points (from {original_p_fake:.1%} to {simulated_p:.1%}), "
-                        f"retaining the primary verdict ({orig_verdict})."
+                        f"retaining the text classifier's verdict ({orig_verdict}) "
+                        f"(note: the final triage verdict may differ when evidence overrides it)."
                     )
             except Exception as e:
                 logger.warning(f"Counterfactual simulation re-scoring failed: {e}")
@@ -484,6 +494,13 @@ class NewsCredibilityFingerprint:
 
         save_path.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        pdf_path = save_path.with_suffix(".pdf")
+        plt.savefig(pdf_path, format="pdf", bbox_inches="tight")
+        try:
+            FIGURES_PDF_DIR.mkdir(parents=True, exist_ok=True)
+            plt.savefig(FIGURES_PDF_DIR / "01_credibility_radar.pdf", format="pdf", bbox_inches="tight")
+        except Exception:
+            pass
         plt.close()
         return save_path
 

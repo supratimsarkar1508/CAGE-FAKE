@@ -16,11 +16,30 @@ WHITESPACE_REGEX = re.compile(r"\s+")
 SENTENCE_SPLIT_REGEX = re.compile(r"(?<=[.!?])\s+")
 WORD_TOKEN_REGEX = re.compile(r"\b[a-zA-Z0-9_\'-]+\b")
 
+# Publisher artifact patterns (datelines, wire tags, bylines, boilerplate)
+DATELINE_REGEX = re.compile(
+    r"^\s*(?:[A-Z][A-Za-z\s.,]{1,30}(?:\s*\([^)]+\))?\s*[-–—:]+\s*|\([A-Za-z\s.,]+\)\s*[-–—:]+\s*)",
+    re.MULTILINE
+)
+PUBLISHER_TAGS_REGEX = re.compile(
+    r"\b(?:TNN|PTI|IANS|ANI|Reuters|AP|AFP|Bloomberg|Indiatimes|Times of India)\b",
+    re.IGNORECASE
+)
+BYLINE_REGEX = re.compile(
+    r"\b(?:by|from|reported by|written by|edited by)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3}\b",
+    re.IGNORECASE
+)
+BOILERPLATE_REGEX = re.compile(
+    r"\b(?:read\s+more|also\s+read|click\s+here|subscribe\s+now|sign\s+up\s+for|follow\s+us|stay\s+tuned)\b.*$",
+    re.IGNORECASE | re.MULTILINE
+)
+
 class TextPreprocessor:
     """
     Dual-pipeline preprocessor producing:
     1. raw_text: Untouched text preserving uppercase, punctuation patterns for stylometry.
-    2. clean_text: Normalized, entity-decoded, URL/HTML-stripped text for TF-IDF & Embeddings.
+    2. clean_text: Normalized, entity-decoded, URL/HTML-stripped text for TF-IDF & Embeddings,
+       with publisher artifacts stripped so models cannot learn publisher identity.
     3. linguistic_stats: Token/Sentence counts, avg sentence length, TTR.
     """
 
@@ -54,7 +73,8 @@ class TextPreprocessor:
     @staticmethod
     def clean_text(text: str) -> str:
         """
-        Cleans text: strips HTML, URLs, unescapes entities, normalizes unicode,
+        Cleans text: strips HTML, URLs, publisher datelines ("Agra:", "WASHINGTON (Reuters) -"),
+        wire acronyms ("TNN"), bylines, boilerplate, unescapes entities, normalizes unicode,
         and collapses excessive whitespace.
         """
         if not text or not isinstance(text, str):
@@ -68,6 +88,18 @@ class TextPreprocessor:
 
         # Remove URLs
         t = URL_REGEX.sub(" ", t)
+
+        # Strip publisher datelines ("Agra:", "WASHINGTON (Reuters) -")
+        t = DATELINE_REGEX.sub(" ", t)
+
+        # Strip publisher wire acronyms / tags ("TNN", "PTI", "Reuters")
+        t = PUBLISHER_TAGS_REGEX.sub(" ", t)
+
+        # Strip bylines
+        t = BYLINE_REGEX.sub(" ", t)
+
+        # Strip promotional boilerplate
+        t = BOILERPLATE_REGEX.sub(" ", t)
 
         # Normalize Unicode
         t = unicodedata.normalize("NFKD", t)

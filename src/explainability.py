@@ -11,7 +11,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from config import SHAP_BACKGROUND_SIZE, SHAP_CACHE_FILE, FIGURES_DIR
+from config import SHAP_BACKGROUND_SIZE, SHAP_CACHE_FILE, FIGURES_DIR, FIGURES_PDF_DIR
 from src.utils import setup_logger
 
 logger = setup_logger("explainability")
@@ -204,9 +204,16 @@ class SHAPExplainer:
         out_path = save_path or (FIGURES_DIR / "stream_contribution.png")
         out_path.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(out_path, dpi=300)
+        pdf_path = out_path.with_suffix(".pdf")
+        plt.savefig(pdf_path, format="pdf", bbox_inches="tight")
+        try:
+            FIGURES_PDF_DIR.mkdir(parents=True, exist_ok=True)
+            plt.savefig(FIGURES_PDF_DIR / "04_stream_contribution.pdf", format="pdf", bbox_inches="tight")
+        except Exception:
+            pass
         plt.close()
 
-        logger.info(f"Stream ablation plot saved to {out_path}")
+        logger.info(f"Stream ablation plot saved to {out_path} and {pdf_path}")
         return out_path
 
     plot_stream_ablations = plot_stream_contributions

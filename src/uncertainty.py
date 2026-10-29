@@ -89,13 +89,23 @@ class UncertaintyGate:
 
         is_ev_conflict = ev_conflict_val is not None and ev_conflict_val > 0.5
         red_flags = linguistic_red_flags or []
+        n_supp_val = evidence_analysis.get("supported_count", 0) if has_evidence_analysis else 0
+        claims_list = evidence_analysis.get("claim_verifications", []) if has_evidence_analysis else []
+        high_sim_supp = [
+            c for c in claims_list
+            if c.get("status") == "Supported" and float(c.get("similarity", c.get("dense_score", 0.0))) >= 0.65
+        ]
+        has_high_evidence_support = bool(len(high_sim_supp) >= 2 or (n_supp_val >= 2 and not has_cont_ev and not is_ev_conflict))
 
         # Check for signal disagreement between linguistic features and evidence
         is_signal_disagreement = False
         if has_evidence_analysis:
             # Evidence supports claims (suggesting REAL), but linguistic red flags indicate heavy manipulation or model predicts FAKE
             if has_supp_ev and (p_calibrated >= 0.50 or len(red_flags) >= 2):
-                is_signal_disagreement = True
+                if has_high_evidence_support and len(red_flags) == 0:
+                    is_signal_disagreement = False
+                else:
+                    is_signal_disagreement = True
             # Evidence contradicts claims (suggesting FAKE), but model predicts REAL with very low P(FAKE)
             elif has_cont_ev and p_calibrated < 0.50:
                 is_signal_disagreement = True
@@ -137,12 +147,20 @@ class UncertaintyGate:
                 f"base-model disagreement ({disagreement:.3f}) is within threshold delta ({self.delta:.3f})."
             )
         elif is_high_dis:
-            decision = "UNCERTAIN"
-            trigger = "high_disagreement"
-            explanation = (
-                f"Base-model disagreement ({disagreement:.3f}) exceeds threshold delta ({self.delta:.3f}); "
-                f"calibrated confidence is {confidence:.1%}."
-            )
+            if has_high_evidence_support:
+                decision = "LIKELY REAL (EVIDENCE-GROUNDED)"
+                trigger = "disagreement_evidence_resolved"
+                explanation = (
+                    f"Inter-model disagreement ({disagreement:.3f} > delta {self.delta:.3f}) resolved by high external "
+                    f"evidence corroboration ({len(high_sim_supp) or n_supp_val} claims verified with similarity >= 0.65)."
+                )
+            else:
+                decision = "UNCERTAIN"
+                trigger = "high_disagreement"
+                explanation = (
+                    f"Base-model disagreement ({disagreement:.3f}) exceeds threshold delta ({self.delta:.3f}); "
+                    f"calibrated confidence is {confidence:.1%}."
+                )
         else:
             if has_evidence_analysis:
                 if has_cont_ev:

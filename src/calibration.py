@@ -4,7 +4,7 @@ Implements Platt Scaling (Sigmoid) and Isotonic Regression fitted strictly on th
 Computes Expected Calibration Error (ECE) and generates reliability diagrams.
 """
 
-from typing import Tuple, Dict, Any, List
+from typing import Tuple, Dict, Any, List, Optional
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
@@ -162,7 +162,9 @@ class ModelCalibrator:
         m = method or self.method
         p_clipped = np.clip(p_uncalibrated, 1e-6, 1.0 - 1e-6)
 
-        if m == "sigmoid":
+        if m == "identity":
+            p_cal = p_clipped
+        elif m == "sigmoid":
             log_odds = np.log(p_clipped / (1.0 - p_clipped)).reshape(-1, 1)
             p_cal = self.platt_model.predict_proba(log_odds)[:, 1]
         elif m in {"temperature", "temp"}:
@@ -173,6 +175,34 @@ class ModelCalibrator:
             raise ValueError(f"Unknown calibration method '{m}'")
 
         return np.clip(p_cal.astype(np.float32), 0.0, 1.0)
+
+    def select_method(self, p_val: np.ndarray, y_val: np.ndarray) -> str:
+        """
+        Evaluates 'identity', 'sigmoid', 'temperature', and 'isotonic' calibration methods
+        on validation split predictions and selects the one achieving the lowest ECE.
+        Sets self.method to the winning method and returns its name.
+        """
+        methods = ["identity", "sigmoid", "temperature", "isotonic"]
+        best_method = "identity"
+        best_ece = float("inf")
+        ece_scores = {}
+
+        for m in methods:
+            p_cal_candidate = self.calibrate(p_val, method=m)
+            ece, _ = compute_ece(y_val, p_cal_candidate)
+            ece_scores[m] = ece
+            if ece < best_ece:
+                best_ece = ece
+                best_method = m
+
+        logger.info(
+            f"Calibration method selection on validation split: "
+            + ", ".join(f"{m}={ece_scores[m]:.4f}" for m in methods)
+            + f" => Selected '{best_method}' (lowest ECE: {best_ece:.4f})"
+        )
+        self.method = best_method
+        return best_method
+
 
     def plot_reliability_diagram(
         self,
@@ -236,3 +266,19 @@ class ModelCalibrator:
 
         logger.info(f"Reliability diagram saved to {out_path} and {pdf_path}")
         return out_path
+
+
+def select_method(
+    p_val: np.ndarray,
+    y_val: np.ndarray,
+    calibrator: Optional[ModelCalibrator] = None,
+) -> str:
+    """
+    Chooses among identity, sigmoid, temperature, isotonic by lowest ECE on the VALIDATION split.
+    If calibrator is passed, uses its fitted models and updates its method; otherwise fits a temporary calibrator.
+    """
+    if calibrator is None:
+        calibrator = ModelCalibrator()
+        calibrator.fit(p_val, y_val)
+    return calibrator.select_method(p_val, y_val)
+

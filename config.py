@@ -17,11 +17,12 @@ CHECKPOINTS_DIR = MODELS_DIR / "checkpoints"
 
 OUTPUTS_DIR = ROOT_DIR / "outputs"
 FIGURES_DIR = OUTPUTS_DIR / "figures"
+FIGURES_PDF_DIR = OUTPUTS_DIR / "figures" / "pdf"  # Per-figure standalone PDFs
 METRICS_DIR = OUTPUTS_DIR / "metrics"
 REPORTS_DIR = OUTPUTS_DIR / "reports"
 
 # Ensure all primary directories exist
-for directory in [DATA_DIR, TRAINED_MODELS_DIR, CHECKPOINTS_DIR, FIGURES_DIR, METRICS_DIR, REPORTS_DIR]:
+for directory in [DATA_DIR, TRAINED_MODELS_DIR, CHECKPOINTS_DIR, FIGURES_DIR, FIGURES_PDF_DIR, METRICS_DIR, REPORTS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
 # Reproducibility
@@ -37,7 +38,7 @@ TEST_RATIO = 0.10
 TFIDF_MAX_FEATURES = 10000
 TFIDF_NGRAM_RANGE = (1, 2)
 TFIDF_SUBLINEAR_TF = True
-TFIDF_MIN_DF = 2
+TFIDF_MIN_DF = 5
 
 # Semantic Features (Stream B)
 SBERT_MODEL_NAME = "all-MiniLM-L6-v2"
@@ -112,6 +113,21 @@ TARGET_METRICS = {
     "ece": 0.08,
     "selective_acc_at_80_coverage": 0.95,
 }
+
+# -----------------------------------------------------------------------
+# Tavily Search API (primary evidence retrieval source)
+# -----------------------------------------------------------------------
+# The key is read from the environment variable TAVILY_API_KEY first;
+# if that is not set, the hardcoded value below is used as a fallback.
+# To override without editing this file:  set TAVILY_API_KEY=<your key>
+TAVILY_API_KEY: str = os.environ.get(
+    "TAVILY_API_KEY",
+    "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",
+)
+# Maximum number of Tavily results to request per claim query
+TAVILY_MAX_RESULTS: int = 5
+# Include raw page content (not just snippets) in Tavily results
+TAVILY_INCLUDE_RAW_CONTENT: bool = True
 
 # Transformer Baseline Configuration
 ENABLE_TRANSFORMER = True

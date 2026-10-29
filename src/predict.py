@@ -25,6 +25,7 @@ from src.url_extractor import extract_article_from_url
 from src.preprocessing import TextPreprocessor
 from src.nlp_explanation import NLPLinguisticExplainer
 from src.evidence.evidence_pipeline import EvidencePipeline
+from src.evidence.domain_whitelist import is_trusted_domain
 from src.ood_detector import OODDetector
 from src.decision_rule import EvidenceFirstDecisionEngine
 from src.report_pdf_dossier import ArticleReportDossier
@@ -213,7 +214,10 @@ class PredictionPipeline:
         # Step 2: Evidence Grounding & Live Multi-Source Verification
         if verbose:
             print("[2/7] Extracting key claims and verifying against live web, fact-checks, and Wikipedia...")
-        evidence_res = self.evidence_pipeline.verify_article(body, title=title, custom_claims=retrieved_sources)
+        evidence_res = self.evidence_pipeline.verify_article(
+            body, title=title, custom_claims=retrieved_sources, source_url=url
+        )
+        evidence_res["is_trusted_publisher"] = is_trusted_domain(domain)
 
         # Step 3: Preprocessing & Linguistic Red Flags
         if verbose:
@@ -224,6 +228,8 @@ class PredictionPipeline:
         linguistic_analysis = self.nlp_explainer.analyze(raw_text, clean_text, title=title)
         signals = linguistic_analysis["signals"]
         red_flags = linguistic_analysis["linguistic_red_flags"]
+        credibility_info = NewsCredibilityFingerprint.compute(signals, word_count=word_count)
+        cred_index = float(credibility_info["overall_credibility_index"])
 
         # Step 4: Multi-Stream Feature Extraction
         if verbose:
@@ -247,25 +253,86 @@ class PredictionPipeline:
         dis_val = float(dis_raw[0])
         p_cal_val = float(self.calibrator.calibrate(np.array([p_uncal_val]))[0])
 
+        # Dynamic Evidence Override Policy:
+        # If external evidence verification has >=2 supported claims (cosine similarity >= 0.65)
+        # AND stylometric credibility index is >= 80:
+        # Penalize semantic/lexical fake probabilities by dynamically downweighting them before triage gating.
+        sens_discipline = float(credibility_info["scores"].get("Sensationalism Discipline", cred_index))
+        has_high_credibility = (cred_index >= 75.0 or sens_discipline >= 80.0)
+        claim_verifs = evidence_res.get("claim_verifications", [])
+        high_sim_supported = [
+            c for c in claim_verifs
+            if c.get("status") == "Supported" and float(c.get("similarity", c.get("dense_score", 0.0))) >= 0.60
+        ]
+        n_high_sim = len(high_sim_supported)
+        has_contra = evidence_res.get("has_any_contradiction", False) or evidence_res.get("has_numeric_conflict", False)
+        evidence_override_active = (n_high_sim >= 2 and has_high_credibility and not has_contra)
+
+        if evidence_override_active:
+            avg_sim = float(np.mean([float(c.get("similarity", c.get("dense_score", 0.70))) for c in high_sim_supported])) if high_sim_supported else 0.75
+            attenuation = max(0.10, 1.0 - avg_sim)
+            base_probas = dict(base_probas)
+            for k in ["lr", "xgb", "lgbm"]:
+                if k in base_probas:
+                    base_probas[k] = float(np.atleast_1d(base_probas[k])[0]) * attenuation
+            avail = [float(np.atleast_1d(base_probas[k])[0]) for k in ["lr", "lgbm", "rf", "xgb"] if k in base_probas]
+            dis_val = float(np.std(avail))
+            p_uncal_val = float(np.mean(avail))
+            p_cal_val = float(self.calibrator.calibrate(np.array([p_uncal_val]))[0])
+
+        # Dynamic Temperature Scaling across ensemble conditioned on model disagreement delta
+        t_dyn = 1.0 + 1.5 * max(0.0, dis_val)
+        if 0.0 < p_cal_val < 1.0:
+            import math
+            logit = math.log(p_cal_val / (1.0 - p_cal_val))
+            p_cal_val = float(1.0 / (1.0 + math.exp(-logit / t_dyn)))
+
         # Step 5.5: Out-Of-Distribution (OOD) Domain Shift Check
         sbert_emb = None
         if hasattr(self.feature_pipeline, "semantic_extractor") and self.feature_pipeline.semantic_extractor is not None:
             try:
-                sbert_emb = self.feature_pipeline.semantic_extractor.transform([clean_text])[0]
-            except Exception:
-                pass
+                sbert_emb = self.feature_pipeline.semantic_extractor.encode([clean_text])[0]
+            except Exception as e:
+                logger.warning(f"Could not compute SBERT embedding for OOD detector: {e}")
 
+        ood_detector_loaded = bool(self.ood_detector is not None)
         if self.ood_detector is not None and sbert_emb is not None:
             ood_res = self.ood_detector.evaluate_single(raw_text, sbert_emb)
+            ood_res["ood_detector_loaded"] = True
         else:
-            # Fallback simple vocab coverage check
+            logger.warning(
+                "OOD detector artifact missing from models/trained/ood_detector.joblib. "
+                "Computing fallback vocabulary coverage against TF-IDF vocabulary..."
+            )
+            vocab = None
+            if hasattr(self, "feature_pipeline") and hasattr(self.feature_pipeline, "lexical_extractor"):
+                vec = getattr(self.feature_pipeline.lexical_extractor, "vectorizer", None)
+                if vec is not None and hasattr(vec, "vocabulary_"):
+                    vocab = vec.vocabulary_
+
+            if vocab:
+                tokens = [w for w in "".join(c if c.isalnum() else " " for c in raw_text.lower()).split() if len(w) > 2]
+                if tokens:
+                    in_vocab = sum(1 for w in tokens if w in vocab)
+                    coverage = float(in_vocab / len(tokens))
+                else:
+                    coverage = 1.0
+            else:
+                coverage = 1.0
+
+            is_ood = bool(coverage < 0.60)
+            ood_score = round(max(0.0, 1.0 - coverage), 4)
             ood_res = {
-                "is_ood": False,
-                "ood_score": 0.0,
-                "vocab_coverage": 1.0,
+                "is_ood": is_ood,
+                "ood_score": ood_score,
+                "vocab_coverage": round(coverage, 4),
                 "mahalanobis_dist": 0.0,
                 "threshold_rho": self.decision_engine.rho,
-                "explanation": "OOD detector active (in-distribution baseline)",
+                "explanation": (
+                    f"Fallback vocabulary coverage ({coverage:.1%} {'< 60% (OOD Domain Shift)' if is_ood else '>= 60% (In-Distribution)'}); "
+                    "ood_detector artifact missing"
+                ),
+                "ood_detector_loaded": False,
             }
 
         def _p(key):
@@ -281,6 +348,8 @@ class PredictionPipeline:
         multi_view_res = {
             "mean_p_fake": p_cal_val,
             "view_disagreement": dis_val,
+            "credibility_index": cred_index,
+            "sensationalism_discipline": sens_discipline,
             "p_lexical":  _p("lr"),
             "p_style":    _p("rf"),    # RF = stylometric expert
             "p_semantic": _p("xgb"),  # XGB = SBERT semantic
@@ -357,14 +426,19 @@ class PredictionPipeline:
             gate_res=gate_res,
         )
 
+        gate_res["ood_detector_loaded"] = ood_detector_loaded
+        article_meta["ood_detector_loaded"] = ood_detector_loaded
+
         # Construct Explainable Output JSON (DUPLICATION REMOVED: claim_verifications omitted)
         explainable_json = {
             "verdict": verdict,
             "confidence": round(float(confidence), 4),
+            "confidence_type": gate_res.get("confidence_type", "calibrated"),
             "per_claim_evidence_status": evidence_res["claim_verifications"],
             "linguistic_red_flags": red_flags,
             "reasoning_summary": reasoning_summary,
             "ood_status": ood_res,
+            "ood_detector_loaded": ood_detector_loaded,
             "policy_category": gate_res["qualifier"],
             "style_evidence_conflict": gate_res.get("style_evidence_conflict", False),
         }
@@ -422,6 +496,8 @@ class PredictionPipeline:
             "verdict": verdict,
             "decision": verdict,
             "confidence": confidence,
+            "confidence_type": gate_res.get("confidence_type", "calibrated"),
+            "ood_detector_loaded": ood_detector_loaded,
             "p_fake": gate_res.get("p_fake", p_cal_val),
             "p_real": gate_res.get("p_real", 1.0 - p_cal_val),
             "per_claim_evidence_status": evidence_res["claim_verifications"],

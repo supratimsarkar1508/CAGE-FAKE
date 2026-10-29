@@ -444,3 +444,168 @@ def test_retrieved_sources_verification(evidence_verifier):
     assert res["status"] == "Supported"
     assert "Ministry of Transport" in res["source"]
     assert res["similarity"] >= 0.60
+
+
+# =========================================================================
+# Phase 1 & 2 & 3 Regression Tests: Evidence-Grounded Triage & Robustness
+# =========================================================================
+
+def test_article_own_domain_never_counts_as_support():
+    """Test 1: The article's own domain never counts as support (self-corroboration exclusion)."""
+    from src.evidence.evidence_pipeline import EvidencePipeline
+    pipeline = EvidencePipeline(use_live_retrieval=False)
+    article_url = "https://timesofindia.indiatimes.com/city/agra/man-gets-life-term/articleshow/135241727.cms"
+
+    # Mock retrieval docs that include TOI itself and an external domain
+    claim = "Man gets life term for abducting, raping minor in Agra court."
+    pipeline.retriever.retrieve_for_claim = lambda c: [
+        {
+            "content": "Man gets life term for abducting, raping minor in Agra court.",
+            "url": "https://timesofindia.indiatimes.com/city/agra/man-gets-life-term/articleshow/135241727.cms",
+            "domain": "timesofindia.indiatimes.com",
+            "is_trusted": True,
+        }
+    ]
+    pipeline.use_live_retrieval = True
+    res = pipeline.verify_article(
+        "Man gets life term for abducting, raping minor in Agra court.",
+        custom_claims=[claim],
+        source_url=article_url,
+    )
+    assert res["self_source_excluded"] >= 1
+    assert "timesofindia.indiatimes.com" not in res["unique_trusted_domains"]
+    assert res["trusted_domains_count"] == 0
+
+
+def test_similarity_is_always_in_0_to_1():
+    """Test 2: Similarity is always in [0, 1] (raw SBERT cosine, never boosted above 1.0)."""
+    from src.evidence.ranker import HybridEvidenceRanker
+    ranker = HybridEvidenceRanker()
+    claim = "A special POCSO court sentenced a man to life imprisonment."
+    docs = [
+        {
+            "content": "A special POCSO court sentenced a man to life imprisonment.",
+            "url": "https://thehindu.com/news/national/court-sentenced-man",
+            "domain": "thehindu.com",
+            "is_trusted": True,
+        }
+    ]
+    ranked = ranker.rank_sentences(claim, docs, top_k=1)
+    assert len(ranked) > 0
+    dense_score = ranked[0]["dense_score"]
+    assert 0.0 <= dense_score <= 1.0
+
+
+def test_agra_vs_kasganj_location_mismatch():
+    """Test 3: Agra-vs-Kasganj evidence -> Unverified, not Supported/Contradicted."""
+    from src.evidence.entity_matcher import EntityNumberMatcher
+    matcher = EntityNumberMatcher()
+    claim = "Man gets life imprisonment for abducting and raping minor in Agra POCSO court."
+    evidence = "Accused sentenced to 20 years rigorous imprisonment in Kasganj special court."
+
+    res = matcher.check_consistency(claim, evidence, is_trusted=True)
+    assert res["location_mismatch"] is True
+    assert "agra" in res["claim_locations"]
+    assert "kasganj" in res["evidence_locations"]
+
+
+def test_rule1_confidence_and_type():
+    """Test 4: Rule 1 confidence < 1.0 and confidence_type == 'evidence_rule'."""
+    from src.decision_rule import EvidenceFirstDecisionEngine
+    engine = EvidenceFirstDecisionEngine(tau=0.80, delta=0.15)
+    ev = {
+        "percent_supported": 0.80,
+        "trusted_domains_count": 3,
+        "has_any_contradiction": False,
+        "has_numeric_conflict": False,
+        "total_claims": 4,
+        "unverified_count": 0,
+    }
+    mv = {
+        "mean_p_fake": 0.85,
+        "view_disagreement": 0.08,
+        "p_style": 0.85,
+    }
+    ood = {"is_ood": False, "ood_score": 0.1, "vocab_coverage": 0.9}
+
+    res = engine.evaluate(ev, mv, ood)
+    assert res["decision"] == "REAL"
+    assert res["confidence"] < 1.0
+    assert res["confidence_type"] == "evidence_rule"
+    assert res["trigger"] == "evidence_corroborated"
+    assert res["disagreement"] == 0.08  # Never 0.000 falsely
+
+
+def test_missing_ood_artifact_fallback_uncertain():
+    """Test 5: Missing OOD artifact + low vocab coverage -> UNCERTAIN, not FAKE."""
+    from src.decision_rule import EvidenceFirstDecisionEngine
+    engine = EvidenceFirstDecisionEngine()
+    ev = {"percent_supported": 0.0, "trusted_domains_count": 0, "total_claims": 3, "unverified_count": 3}
+    mv = {"mean_p_fake": 0.92, "view_disagreement": 0.04, "p_style": 0.92}
+    ood = {"is_ood": True, "ood_score": 0.65, "vocab_coverage": 0.35, "ood_detector_loaded": False}
+    res = engine.evaluate(ev, mv, ood)
+    assert res["decision"] == "UNCERTAIN"
+    assert res["trigger"] in ("domain_shift_no_evidence", "evidence_absence_abstain")
+
+
+def test_rf_real_vs_3_fake_split():
+    """Test 6: RF-REAL vs 3 FAKE split -> UNCERTAIN (trigger: style_lexical_split)."""
+    from src.decision_rule import EvidenceFirstDecisionEngine
+    engine = EvidenceFirstDecisionEngine()
+    ev = {"percent_supported": 0.20, "trusted_domains_count": 1, "total_claims": 4, "unverified_count": 1}
+    mv = {
+        "mean_p_fake": 0.85,
+        "view_disagreement": 0.12,
+        "p_lexical": 0.92,   # LR says FAKE
+        "p_topic": 0.88,     # LGBM says FAKE
+        "p_semantic": 0.95,  # XGB says FAKE
+        "p_style": 0.22,     # RF stylometrics says REAL
+    }
+    ood = {"is_ood": False, "ood_score": 0.2, "vocab_coverage": 0.85}
+    res = engine.evaluate(ev, mv, ood)
+    assert res["decision"] == "UNCERTAIN"
+    assert res["trigger"] == "style_lexical_split"
+    assert res["confidence_type"] == "abstain"
+
+
+def test_extra_dataset_loading_and_stratification(tmp_path):
+    """Test 7 (Phase 4): Merging extra datasets from data/extra/*.csv with source_dataset tagging and joint stratification."""
+    import pandas as pd
+    from pathlib import Path
+    from src.data_loader import load_and_standardize_data, create_stratified_splits
+    from config import ROOT_DIR
+
+    extra_dir = ROOT_DIR / "data" / "extra"
+    extra_dir.mkdir(parents=True, exist_ok=True)
+    test_extra_csv = extra_dir / "temp_indian_sample.csv"
+
+    # Create a small mock dataset with Indian crime/court news
+    mock_df = pd.DataFrame({
+        "title": [f"Agra court sentences accused in POCSO case {i}" for i in range(20)],
+        "text": [f"In Agra special POCSO court, judge delivered life term verdict for heinous offense number {i}." for i in range(20)],
+        "label": ["REAL" if i % 2 == 0 else "FAKE" for i in range(20)],
+    })
+    mock_df.to_csv(test_extra_csv, index=False)
+
+    try:
+        std_df, stats = load_and_standardize_data()
+        assert "source_dataset" in std_df.columns
+        assert "temp_indian_sample.csv" in std_df["source_dataset"].values
+        assert "news.csv" in std_df["source_dataset"].values
+        assert stats["source_distribution"]["temp_indian_sample.csv"] == 20
+
+        # Test stratified splitting
+        train_df, val_df, calib_df, test_df = create_stratified_splits(std_df, save_manifest=False)
+        assert len(train_df) > 0
+        assert len(val_df) > 0
+        assert len(calib_df) > 0
+        assert len(test_df) > 0
+
+        # Verify zero leakage across splits
+        train_bodies = set(train_df["body"])
+        test_bodies = set(test_df["body"])
+        assert len(train_bodies.intersection(test_bodies)) == 0
+    finally:
+        if test_extra_csv.exists():
+            test_extra_csv.unlink()
+
